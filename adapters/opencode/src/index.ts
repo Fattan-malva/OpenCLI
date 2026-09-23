@@ -90,10 +90,18 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   buildCommand(context: AgentContext): CommandSpec {
-    const args: string[] = [];
-    if (context.mode === 'plan') {
-      args.push('--plan');
+    // Use OpenCode's automation command instead of the default TUI.
+    // The agent and model are selected at runtime by OpenCLI's workflow router.
+    const args: string[] = ['run'];
+
+    if (context.mode) {
+      args.push('--agent', context.mode);
     }
+
+    if (context.model?.provider && context.model.model) {
+      args.push('--model', `${context.model.provider}/${context.model.model}`);
+    }
+
     args.push(context.taskDescription);
 
     return {
@@ -105,8 +113,8 @@ export class OpenCodeAdapter implements AgentAdapter {
         OPENCODE_PROJECT: context.projectPath,
         OPENCODE_TASK: context.taskId,
       },
-      timeout: 600_000, // 10 minutes
-      riskLevel: 'medium',
+      timeout: 600_000,
+      riskLevel: context.mode === 'build' ? 'high' : 'medium',
     };
   }
 
