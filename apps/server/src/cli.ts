@@ -270,11 +270,15 @@ function readCurrentFromConfig(
   };
 }
 
-export async function probeCapabilities(adapterId: string, force = false): Promise<AdapterCapabilities> {
+export async function probeCapabilities(
+  adapterId: string,
+  force = false,
+  modesOverride?: Mode[],
+): Promise<AdapterCapabilities> {
   const cached = CAPABILITY_CACHE.get(adapterId);
-  if (!force && cached && Date.now() - cached.at < CAPABILITY_TTL_MS) return cached.data;
+  if (!modesOverride && !force && cached && Date.now() - cached.at < CAPABILITY_TTL_MS) return cached.data;
 
-  const modes = await probeModes(adapterId, force);
+  const modes = modesOverride ?? (await probeModes(adapterId, force));
   const [{ providers, models }, current] = await Promise.all([
     probeModelList(adapterId),
     Promise.resolve(readCurrentFromConfig(adapterId, modes)),
