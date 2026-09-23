@@ -256,6 +256,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setTasks([]);
     }
+    try {
+      const events = await api.listEvents(activeProject.id, 200, workflow.id);
+      setLogs(events.reverse().map((event) => ({
+        time: new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 } as Intl.DateTimeFormatOptions),
+        type: event.type,
+        message: event.payload,
+        agentId: event.agentId,
+        taskId: event.taskId,
+      })));
+    } catch {
+      setLogs([]);
+    }
   }, [activeProject?.id]);
 
   const createWorkflow = useCallback(async (name: string, description?: string): Promise<boolean> => {
