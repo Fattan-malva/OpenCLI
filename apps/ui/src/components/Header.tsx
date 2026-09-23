@@ -41,8 +41,8 @@ export function Header() {
             <span>{text}</span>
           </div>
         ) : (
-          <div className={`${base} ${COLOR_CLASSES[color]}`}>
-            <Icon name={icon} className={`w-3.5 h-3.5 ${pulse ? 'animate-spin' : ''}`} />
+          <div className={`${base} ${COLOR_CLASSES[color]} ${text === 'Input Required' ? 'status-shimmer' : ''}`}>
+            <Icon name={icon} className="w-3.5 h-3.5" />
             <span>{text}</span>
           </div>
         )}
