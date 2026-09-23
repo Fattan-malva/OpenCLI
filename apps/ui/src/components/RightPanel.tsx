@@ -60,7 +60,7 @@ function LogLine({ entry }: { entry: LogEntry }) {
 }
 
 export function RightPanel() {
-  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject } = useStore();
+  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject, activeWorkflow } = useStore();
 
   const todoGroups = {
     progress: tasks.filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status)),
@@ -80,15 +80,29 @@ export function RightPanel() {
           path: '—',
           settings: { maxParallelAgents: 4, defaultMode: 'build' },
         },
-    activeTasks: tasks.filter((t) => t.status === 'RUNNING').map((t) => t.id),
-    memory: {
-      lastArtifacts: ['src/auth/jwt.ts', 'src/auth/middleware.ts'],
-      globalConstraints: ['Use TypeScript', 'No Any types'],
+    workflow: activeWorkflow
+      ? {
+          id: activeWorkflow.id,
+          name: activeWorkflow.name,
+          status: activeWorkflow.status,
+        }
+      : null,
+    activeTasks: tasks
+      .filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status))
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        adapter: task.agentId,
+        mode: task.mode,
+      })),
+    taskSummary: {
+      total: tasks.length,
+      completed: tasks.filter((task) => task.status === 'COMPLETED').length,
+      running: tasks.filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status)).length,
+      pending: tasks.filter((task) => ['PENDING', 'READY'].includes(task.status)).length,
+      blocked: tasks.filter((task) => task.status === 'BLOCKED').length,
     },
-    systemStats: {
-      uptime: '02:15:43',
-      totalEvents: logs.length,
-    },
+    eventCount: logs.length,
   };
 
   return (
@@ -210,28 +224,27 @@ export function RightPanel() {
         </div>
       )}
 
-      {/* Global Resource Monitor */}
-      <div className="h-32 border-t border-app-border bg-app-surface p-4 flex flex-col gap-2 text-xs">
+      {/* Workflow Resource Monitor */}
+      <div className="h-36 border-t border-app-border bg-app-surface p-4 flex flex-col gap-2 text-xs">
         <div className="text-app-textStrong font-medium mb-1 flex items-center">
-          <Icon name="activity" className="w-3.5 h-3.5 mr-1.5" /> Resource Utilization
+          <Icon name="activity" className="w-3.5 h-3.5 mr-1.5" /> Workflow Resources
         </div>
-        <div className="space-y-1">
-          <div className="flex justify-between text-app-text">
-            <span>Concurrent Agents</span>
-            <span>2 / 4</span>
-          </div>
-          <div className="w-full bg-app-bg rounded-full h-1.5">
-            <div className="bg-app-primary h-1.5 rounded-full" style={{ width: '50%' }}></div>
-          </div>
+        <div className="flex justify-between text-app-text">
+          <span>Active Tasks</span>
+          <span className="text-app-textStrong">{tasks.filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status)).length}</span>
         </div>
-        <div className="space-y-1 mt-2">
-          <div className="flex justify-between text-app-text">
-            <span>API Rate Limit (Tokens/min)</span>
-            <span>42k / 100k</span>
-          </div>
-          <div className="w-full bg-app-bg rounded-full h-1.5">
-            <div className="bg-app-warning h-1.5 rounded-full" style={{ width: '42%' }}></div>
-          </div>
+        <div className="flex justify-between text-app-text">
+          <span>Completed</span>
+          <span className="text-emerald-400">{tasks.filter((task) => task.status === 'COMPLETED').length} / {tasks.length}</span>
+        </div>
+        <div className="w-full bg-app-bg rounded-full h-1.5">
+          <div
+            className="bg-app-primary h-1.5 rounded-full transition-all"
+            style={{ width: `${tasks.length ? Math.round((tasks.filter((task) => task.status === 'COMPLETED').length / tasks.length) * 100) : 0}%` }}
+          />
+        </div>
+        <div className="text-[10px] text-app-text mt-1">
+          Token/quota telemetry will be supplied by the resource manager in a later phase.
         </div>
       </div>
     </aside>
