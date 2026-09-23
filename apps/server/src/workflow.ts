@@ -77,7 +77,7 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
 
   const modes = await adapter.getModes();
   const mode = task.modeId ?? project.defaultMode ?? modes.find((item) => item.id === 'build')?.id ?? modes[0]?.id ?? 'build';
-  const route = deps.db.listModelRoutings(project.id)[adapterId]?.[mode];
+  const modelRoute = deps.db.listModelRoutings(project.id)[adapterId]?.[mode];
 
   deps.workspaceService.registerFileScope(task.id, task.fileScopes);
 
@@ -103,7 +103,7 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
     taskId: task.id,
     taskDescription: task.description ? `${task.title}\n\n${task.description}` : task.title,
     mode,
-    model: route,
+    model: modelRoute,
     environment: {},
     relevantFiles: [...task.fileScopes],
     projectMemory: {},
@@ -150,8 +150,8 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
         processId,
         adapterId,
         mode,
-        provider: route?.provider,
-        model: route?.model,
+        provider: modelRoute?.provider,
+        model: modelRoute?.model,
         workspacePath,
       },
     }).catch(() => undefined);
