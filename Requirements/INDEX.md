@@ -1,0 +1,27 @@
+# OpenCLI Documentation Index
+
+- `01-product-spec.md` — 01 — Product Specification
+- `02-architecture.md` — 02 — System Architecture
+- `03-domain-model.md` — 03 — Domain Model
+- `04-agent-adapter-spec.md` — 04 — Agent Adapter Specification
+- `05-config-spec.md` — 05 — Configuration Specification
+- `06-task-workflow.md` — 06 — Task and Workflow System
+- `07-concurrency-isolation.md` — 07 — Concurrency and Isolation
+- `08-event-bus.md` — 08 — Event Bus
+- `09-git-workspace.md` — 09 — Git and Workspace Management
+- `10-installation-discovery.md` — 10 — Installation and Discovery
+- `11-security.md` — 11 — Security
+- `12-ui-spec.md` — 12 — UI/UX Specification
+- `13-api-spec.md` — 13 — Internal API Specification
+- `14-database-schema.md` — 14 — Database Schema
+- `15-plugin-system.md` — 15 — Plugin System
+- `16-roadmap.md` — 16 — Roadmap
+- `17-testing.md` — 17 — Testing Strategy
+- `18-recovery-observability.md` — 18 — Recovery and Observability
+- `19-example-project.md` — 19 — End-to-End Example Project
+- `20-development-rules.md` — 20 — Development Rules
+- `21-mvp-backlog.md` — 21 — MVP Backlog
+- `22-agent-config-examples.md` — 22 — Agent Configuration Examples
+- `23-project-layout.md` — 23 — Recommended Repository Layout
+- `24-acceptance-scenarios.md` — 24 — Acceptance Scenarios
+- `README.md` — OpenCLI
