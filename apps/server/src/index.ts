@@ -10,7 +10,7 @@ import { ProcessManager } from '@opencli/runtime';
 import { Scheduler } from '@opencli/scheduler';
 import { GitService } from '@opencli/git';
 import { WorkspaceService } from '@opencli/workspace';
-import { AdapterRegistry } from '@opencli/adapter';
+import { AdapterRegistry, AdapterRouter } from '@opencli/adapter';
 import { discoverAllAgents, agentFromDetection, detectOS } from '@opencli/discovery';
 import { OpenCodeAdapter } from '@opencli/adapter-opencode';
 import { KiloCodeAdapter } from '@opencli/adapter-kilocode';
@@ -154,11 +154,17 @@ discoverAgents().catch(console.error);
 // Release stale locks on startup
 workspaceService.releaseStaleLocks();
 
+const adapterRouter = new AdapterRouter(
+  adapterRegistry,
+  (adapterId) => getAdapterActive(adapterId),
+);
+
 const workflowRuntime = {
   db,
   eventBus,
   scheduler,
   adapterRegistry,
+  adapterRouter,
   runtime,
   gitService,
   workspaceService,
