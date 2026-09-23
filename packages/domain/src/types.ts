@@ -57,9 +57,22 @@ export interface Mode {
   defaultModel?: string;
 }
 
+export interface Workflow {
+  id: string;
+  projectId: string;
+  name: string;
+  description?: string;
+  status: WorkflowStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WorkflowStatus = 'draft' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
 export interface Task {
   id: string;
   projectId: string;
+  workflowId?: string;
   title: string;
   description?: string;
   status: TaskStatus;
@@ -151,7 +164,11 @@ export type EventType =
   | 'git.merge_conflict'
   | 'git.integrated'
   | 'workflow.started'
+  | 'workflow.paused'
+  | 'workflow.resumed'
   | 'workflow.completed'
+  | 'workflow.failed'
+  | 'workflow.cancelled'
   | 'installation.started'
   | 'installation.completed'
   | 'installation.failed';
