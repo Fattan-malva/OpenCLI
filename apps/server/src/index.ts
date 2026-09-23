@@ -857,8 +857,11 @@ api.post('/workflows/:workflowId/pause', async (c) => {
       const session = sessions.find((item) => item.status === 'running');
       if (session?.processId) {
         await runtime.pause(session.processId);
-        db.updateSession(session.id, { status: 'paused' });
-        db.updateTask(task.id, { status: 'paused' });
+        const process = runtime.getProcess(session.processId);
+        if (process?.status === 'paused') {
+          db.updateSession(session.id, { status: 'paused' });
+          db.updateTask(task.id, { status: 'paused' });
+        }
       }
     }
   }
