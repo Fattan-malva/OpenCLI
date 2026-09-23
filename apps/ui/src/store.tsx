@@ -356,7 +356,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setScreen('app');
         setPage('workflow');
         await loadWorkflows(project.id);
-        await loadAdapters();
+        setAdapters(await api.listAdapters());
         await loadTasks(project.id);
         await loadEvents(project.id);
         return true;
