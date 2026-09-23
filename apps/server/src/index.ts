@@ -31,6 +31,15 @@ mkdirSync(DATA_DIR, { recursive: true });
 const eventBus = new EventBus();
 const sseBridge = new EventBusSSEBridge(eventBus);
 const db = new OpenCLIRepository({ path: join(DATA_DIR, 'opencli.db') });
+
+// Persist every domain event so Event Bus history survives restarts and the UI can replay state.
+eventBus.on('*', (event) => {
+  try {
+    db.insertEvent(event);
+  } catch (error) {
+    console.warn('[EventStore] Could not persist event:', error);
+  }
+});
 const config = new InMemoryConfigStore();
 const permissions = new PermissionEvaluator();
 const runtime = new ProcessManager(eventBus);
