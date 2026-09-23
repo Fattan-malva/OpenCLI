@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { AGENTS, providerRegistry, useStore } from '../store';
+import { api } from '../lib/api';
+import type { AdapterInfo, AdapterMode } from '../lib/types';
 import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, showToast, addLog } = useStore();
+  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, showToast, addLog, adapters, activeProject } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
-  const [agentId, setAgentId] = useState('claude');
-  const [mode, setMode] = useState('build');
+  const [agentId, setAgentId] = useState('');
+  const [mode, setMode] = useState('');
+  const [availableModes, setAvailableModes] = useState<AdapterMode[]>([]);
   const [draft, setDraft] = useState<AgentConfigs[string] | null>(null);
 
   useEffect(() => {
@@ -20,10 +23,36 @@ export function Modal() {
     if (modal?.kind === 'addTask') {
       setTitle('');
       setDesc('');
-      setAgentId('claude');
-      setMode('build');
+      const firstAdapter = adapters.find((adapter) => adapter.installed && adapter.active);
+      setAgentId(firstAdapter?.id ?? '');
+      setAvailableModes([]);
+      setMode('');
     }
-  }, [modal, agentConfigs]);
+  }, [modal, agentConfigs, adapters]);
+
+  useEffect(() => {
+    if (modal?.kind !== 'addTask' || !activeProject || !agentId) return;
+
+    let cancelled = false;
+    api.getProjectAdapterCapabilities(activeProject.id, agentId)
+      .then((capabilities) => {
+        if (cancelled) return;
+        setAvailableModes(capabilities.modes);
+        setMode((current) => capabilities.modes.some((item) => item.id === current)
+          ? current
+          : capabilities.current.mode || capabilities.modes[0]?.id || '');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAvailableModes([]);
+          setMode('');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modal?.kind, activeProject?.id, agentId]);
 
   if (!modal) return null;
 
@@ -59,6 +88,8 @@ export function Modal() {
               setAgentId={setAgentId}
               mode={mode}
               setMode={setMode}
+              adapters={adapters.filter((adapter) => adapter.installed && adapter.active)}
+              modes={availableModes}
             />
           )}
           {modal.kind === 'agentConfig' && modal.agentId && draft && (
@@ -151,6 +182,8 @@ function AddTaskBody({
   setAgentId,
   mode,
   setMode,
+  adapters,
+  modes,
 }: {
   title: string;
   setTitle: (v: string) => void;
@@ -160,6 +193,8 @@ function AddTaskBody({
   setAgentId: (v: string) => void;
   mode: string;
   setMode: (v: string) => void;
+  adapters: AdapterInfo[];
+  modes: AdapterMode[];
 }) {
   const { submitNewTask } = useStore();
 
@@ -194,29 +229,39 @@ function AddTaskBody({
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-app-text mb-1 font-medium">Assign Agent</label>
+          <label className="block text-app-text mb-1 font-medium">Runtime Adapter</label>
           <select
+            required
             value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
+            onChange={(e) => {
+              setAgentId(e.target.value);
+              setMode('');
+            }}
             className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary"
           >
-            <option value="claude">Claude (Opus)</option>
-            <option value="codex">Codex Agent</option>
-            <option value="opencode">OpenCode</option>
-            <option value="aider">Aider</option>
+            {adapters.length === 0 && <option value="">No active adapter</option>}
+            {adapters.map((adapter) => (
+              <option key={adapter.id} value={adapter.id}>
+                {adapter.name}
+              </option>
+            ))}
           </select>
         </div>
         <div>
           <label className="block text-app-text mb-1 font-medium">Execution Mode</label>
           <select
+            required
             value={mode}
             onChange={(e) => setMode(e.target.value)}
             className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary"
+            disabled={!modes.length}
           >
-            <option value="build">Build</option>
-            <option value="plan">Plan</option>
-            <option value="review">Review</option>
-            <option value="test">Test</option>
+            {!modes.length && <option value="">Loading modes...</option>}
+            {modes.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
           </select>
         </div>
       </div>
