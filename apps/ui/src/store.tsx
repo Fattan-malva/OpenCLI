@@ -81,7 +81,7 @@ export interface Store {
   agentConfigs: AgentConfigs;
   saveAgentConfig: (agentId: string, modes: AgentConfigs[string]['modes']) => void;
   updateAgentRoute: (agentId: string, mode: string, field: 'provider' | 'model', value: string) => void;
-  submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string }) => Promise<boolean>;
+  submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string; dependencies?: string[]; fileScopes?: string[] }) => Promise<boolean>;
   adapters: AdapterInfo[];
   loadAdapters: () => Promise<void>;
   setAdapterActive: (id: string, active: boolean) => Promise<void>;
@@ -566,7 +566,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const closeModal = () => setModal(null);
 
-  const submitNewTask = async (opts: { title: string; desc: string; agentId: string; mode: string }): Promise<boolean> => {
+  const submitNewTask = async (opts: { title: string; desc: string; agentId: string; mode: string; dependencies?: string[]; fileScopes?: string[] }): Promise<boolean> => {
     if (!activeProject) {
       showToast('No Project', 'Open a project before creating a workflow task.', 'warning');
       return false;
@@ -576,8 +576,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         title: opts.title,
         description: opts.desc,
         workflowId: activeWorkflow?.id,
-        agentId: opts.agentId,
-        modeId: opts.mode,
+        agentId: opts.agentId || undefined,
+        modeId: opts.mode || undefined,
+        dependencies: opts.dependencies ?? [],
+        fileScopes: opts.fileScopes ?? [],
       });
       const task = mapBackendTask(created);
       setTasks((prev) => [...prev, task]);
