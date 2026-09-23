@@ -251,6 +251,20 @@ export class GitService {
     }
   }
 
+  // Detect tracked or untracked changes in a worktree.
+  hasChanges(worktreePath: string): boolean {
+    try {
+      const status = execSync('git status --porcelain --untracked-files=all', {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        timeout: 10000,
+      }).trim();
+      return status.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   // Get diff for a worktree
   getDiff(worktreePath: string, staged = false): string {
     try {
