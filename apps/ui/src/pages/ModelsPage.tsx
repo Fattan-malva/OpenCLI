@@ -14,7 +14,16 @@ export function ModelsPage({ active }: { active: boolean }) {
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Record<string, string | null>>({});
 
-  const activeAdapters = adapters.filter((a) => a.installed && a.active);
+  const activeAdapters = adapters.filter(
+    (a) =>
+      a.installed &&
+      a.active &&
+      sessions.some(
+        (session) =>
+          session.adapterId === a.id &&
+          (session.status === 'running' || session.status === 'starting'),
+      ),
+  );
 
   useEffect(() => {
     if (!active || !activeProject) return;
