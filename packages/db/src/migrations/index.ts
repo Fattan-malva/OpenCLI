@@ -1,4 +1,5 @@
 import { migration001 } from './001-initial.js';
 import { migration002 } from './002-settings.js';
+import { migration003 } from './003-model-routing.js';
 
-export const migrations = [migration001, migration002];
+export const migrations = [migration001, migration002, migration003];
