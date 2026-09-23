@@ -4,14 +4,6 @@ import { logTypeColor } from '../store';
 import { Icon } from '../lib/icons';
 import type { LogEntry } from '../lib/types';
 
-const MOCK_TODOS = [
-  { id: 'todo-1', title: 'Analyze project structure', status: 'done' },
-  { id: 'todo-2', title: 'Implement core workflow', status: 'progress' },
-  { id: 'todo-3', title: 'Connect agent runtime', status: 'progress' },
-  { id: 'todo-4', title: 'Run tests and validate', status: 'todo' },
-  { id: 'todo-5', title: 'Prepare final changes', status: 'todo' },
-] as const;
-
 
 function HighlightJson({ json }: { json: string }) {
   const token =
@@ -71,9 +63,9 @@ export function RightPanel() {
   const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject } = useStore();
 
   const todoGroups = {
-    progress: MOCK_TODOS.filter((todo) => todo.status === 'progress'),
-    todo: MOCK_TODOS.filter((todo) => todo.status === 'todo'),
-    done: MOCK_TODOS.filter((todo) => todo.status === 'done'),
+    progress: tasks.filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status)),
+    todo: tasks.filter((task) => ['PENDING', 'READY'].includes(task.status)),
+    done: tasks.filter((task) => task.status === 'COMPLETED'),
   };
 
   const contextData = {
@@ -135,7 +127,7 @@ export function RightPanel() {
         </button>
       </div>
 
-      {/* AI Todo List — mock data for now */}
+      {/* AI Todo List — backed by workflow task state */}
       {rightTab === 'todo' && (
         <div className="flex-1 overflow-y-auto p-4 bg-[#09090b]">
           <div className="flex items-center justify-between mb-4">
@@ -144,7 +136,7 @@ export function RightPanel() {
               <div className="text-[10px] text-app-text mt-0.5">AI-generated execution plan</div>
             </div>
             <span className="text-[10px] font-mono text-app-text bg-app-bg border border-app-border rounded px-2 py-1">
-              {MOCK_TODOS.filter((todo) => todo.status === 'done').length}/{MOCK_TODOS.length}
+              {todoGroups.done.length}/{tasks.length}
             </span>
           </div>
 
@@ -166,15 +158,18 @@ export function RightPanel() {
                     <span className="text-app-text ml-auto">{items.length}</span>
                   </div>
                   <div className="space-y-1.5">
-                    {items.map((todo) => (
-                      <div key={todo.id} className="flex items-start gap-2.5 rounded-md border border-app-border/70 bg-app-bg/60 px-3 py-2.5">
+                    {items.map((task) => (
+                      <div key={task.id} className="flex items-start gap-2.5 rounded-md border border-app-border/70 bg-app-bg/60 px-3 py-2.5">
                         <Icon
                           name={status === 'done' ? 'circle-check' : status === 'progress' ? 'circle-dot' : 'circle'}
                           className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${config.color}`}
                         />
-                        <span className={`text-xs leading-relaxed ${status === 'done' ? 'text-app-text line-through opacity-60' : 'text-app-textStrong'}`}>
-                          {todo.title}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-xs leading-relaxed ${status === 'done' ? 'text-app-text line-through opacity-60' : 'text-app-textStrong'}`}>
+                            {task.title}
+                          </div>
+                          <div className="text-[9px] font-mono text-app-text mt-0.5 truncate">{task.id}</div>
+                        </div>
                       </div>
                     ))}
                   </div>
