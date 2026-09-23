@@ -472,7 +472,7 @@ api.put('/projects/:projectId/model-routing/:agentId/:modeId', async (c) => {
   }
 
   try {
-    const capabilities = await probeCapabilities(agentId, true);
+    const capabilities = await probeCapabilities(agentId, false);
     const modeExists = capabilities.modes.some((mode) => mode.id === modeId);
     if (!modeExists) return c.json({ error: `Unknown mode: ${modeId}` }, 400);
 
