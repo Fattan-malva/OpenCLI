@@ -466,7 +466,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       stream.close();
       if (refreshTimer) window.clearTimeout(refreshTimer);
     };
-  }, [screen, activeProject?.id, loadWorkflows, loadTasks, loadSessions]);
+  }, [screen, activeProject?.id, activeWorkflow?.id, loadWorkflows, loadTasks, loadSessions]);
 
   useEffect(() => {
     (async () => {
