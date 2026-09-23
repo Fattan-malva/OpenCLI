@@ -11,8 +11,8 @@ import {
   type SetStateAction,
 } from 'react';
 import {
-  AGENTS,
-  initialAgentConfigs,
+  ADAPTERS,
+  initialAdapterConfigs,
   providerRegistry,
   STATUS,
 } from './lib/data';
@@ -20,7 +20,7 @@ import { api, getToken, setToken } from './lib/api';
 import type {
   AdapterInfo,
   AdapterSession,
-  AgentConfigs,
+  AdapterConfigs,
   GlobalStatus,
   LogEntry,
   PageId,
@@ -36,7 +36,7 @@ export type AppScreen = 'boot' | 'auth' | 'projects' | 'app';
 
 export interface ModalState {
   title: string;
-  kind: 'settings' | 'addTask' | 'agentConfig' | 'newProject' | 'newWorkflow';
+  kind: 'settings' | 'addTask' | 'adapterConfig' | 'newProject' | 'newWorkflow';
   agentId?: string;
 }
 
@@ -78,8 +78,8 @@ export interface Store {
   addLog: (type: string, message: string | Record<string, unknown>, agentId?: string, taskId?: string) => void;
   clearLogs: () => void;
   terminalRef: RefObject<HTMLDivElement | null>;
-  agentConfigs: AgentConfigs;
-  saveAgentConfig: (agentId: string, modes: AgentConfigs[string]['modes']) => void;
+  adapterConfigs: AdapterConfigs;
+  saveAdapterConfig: (agentId: string, modes: AdapterConfigs[string]['modes']) => void;
   updateAgentRoute: (agentId: string, mode: string, field: 'provider' | 'model', value: string) => void;
   submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string; dependencies?: string[]; fileScopes?: string[] }) => Promise<boolean>;
   adapters: AdapterInfo[];
@@ -186,8 +186,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const terminalRef = useRef<HTMLDivElement | null>(null);
-  const [agentConfigs, setAgentConfigs] = useState<AgentConfigs>(
-    () => JSON.parse(JSON.stringify(initialAgentConfigs)),
+  const [adapterConfigs, setAdapterConfigs] = useState<AdapterConfigs>(
+    () => JSON.parse(JSON.stringify(initialAdapterConfigs)),
   );
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [sessions, setSessionsState] = useState<AdapterSession[]>([]);
@@ -574,8 +574,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [activeWorkflow, activeProject?.id, loadWorkflows, loadTasks, showToast]);
 
-  const saveAgentConfig = (agentId: string, modes: AgentConfigs[string]['modes']) => {
-    setAgentConfigs((prev) => ({ ...prev, [agentId]: { modes } }));
+  const saveAdapterConfig = (agentId: string, modes: AdapterConfigs[string]['modes']) => {
+    setAdapterConfigs((prev) => ({ ...prev, [agentId]: { modes } }));
   };
 
   const updateAgentRoute = (
@@ -584,7 +584,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     field: 'provider' | 'model',
     value: string,
   ) => {
-    setAgentConfigs((prev) => {
+    setAdapterConfigs((prev) => {
       const cfg = prev[agentId];
       if (!cfg) return prev;
       const modes = { ...cfg.modes, [mode]: { ...cfg.modes[mode] } };
@@ -596,7 +596,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return { ...prev, [agentId]: { modes } };
     });
-    const cfg = agentConfigs[agentId]?.modes[mode];
+    const cfg = adapterConfigs[agentId]?.modes[mode];
     if (field === 'provider') {
       showToast('Routing Updated', `${agentId} [${mode}] now uses ${value} (${providerRegistry[value][0]})`, 'info');
       addLog('config.updated', `Changed ${agentId} mode '${mode}' to provider ${value}`, 'system');
@@ -674,8 +674,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addLog,
     clearLogs,
     terminalRef,
-    agentConfigs,
-    saveAgentConfig,
+    adapterConfigs,
+    saveAdapterConfig,
     updateAgentRoute,
     submitNewTask,
     adapters,
@@ -690,4 +690,4 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export { AGENTS, COLOR_CLASSES, TOAST_STYLE, logTypeColor, providerRegistry, STATUS };
+export { ADAPTERS, COLOR_CLASSES, TOAST_STYLE, logTypeColor, providerRegistry, STATUS };
