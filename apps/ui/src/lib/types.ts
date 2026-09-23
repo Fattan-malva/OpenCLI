@@ -1,4 +1,4 @@
-export type PageId = 'workflow' | 'agents' | 'models' | 'workspaces';
+export type PageId = 'workflow' | 'agents' | 'models' | 'workspaces' | 'settings';
 export type RightTab = 'logs' | 'context';
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'COMPLETED' | 'FAILED';
@@ -67,4 +67,34 @@ export interface GlobalStatus {
   color: 'indigo' | 'amber' | 'sky';
   icon: string;
   pulse: boolean;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  path: string;
+  gitRepository?: string;
+  defaultAgent?: string;
+  defaultMode?: string;
+  defaultModel?: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SystemSettings {
+  maxParallelAgents: number;
+  defaultModePolicy: string;
+  telemetry: boolean;
+}
+
+export interface FsEntry {
+  name: string;
+  path: string;
+}
+
+export interface FsListResult {
+  path: string;
+  parent: string | null;
+  entries: FsEntry[];
 }

@@ -59,14 +59,20 @@ function LogLine({ entry }: { entry: LogEntry }) {
 }
 
 export function RightPanel() {
-  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks } = useStore();
+  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject } = useStore();
 
   const contextData = {
-    project: {
-      name: 'marketplace-v2',
-      path: 'C:/Projects/marketplace',
-      settings: { maxParallelAgents: 4, defaultMode: 'build' },
-    },
+    project: activeProject
+      ? {
+          name: activeProject.name,
+          path: activeProject.path,
+          settings: { maxParallelAgents: 4, defaultMode: 'build' },
+        }
+      : {
+          name: '—',
+          path: '—',
+          settings: { maxParallelAgents: 4, defaultMode: 'build' },
+        },
     activeTasks: tasks.filter((t) => t.status === 'RUNNING').map((t) => t.id),
     memory: {
       lastArtifacts: ['src/auth/jwt.ts', 'src/auth/middleware.ts'],

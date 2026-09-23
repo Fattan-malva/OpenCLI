@@ -7,6 +7,7 @@ const NAV: { id: PageId; label: string; icon: string; count?: string }[] = [
   { id: 'agents', label: 'Agents', icon: 'bot', count: '4' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu' },
   { id: 'workspaces', label: 'Workspaces', icon: 'git-merge' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
 export function Sidebar() {

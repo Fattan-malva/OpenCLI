@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -16,24 +17,38 @@ import {
   providerRegistry,
   STATUS,
 } from './lib/data';
+import { api, getToken, setToken } from './lib/api';
 import type {
   AgentConfigs,
   GlobalStatus,
   LogEntry,
   PageId,
+  ProjectRecord,
   RightTab,
   Task,
   Toast,
   ToastType,
 } from './lib/types';
 
+export type AppScreen = 'boot' | 'auth' | 'projects' | 'app';
+
 export interface ModalState {
   title: string;
-  kind: 'settings' | 'addTask' | 'agentConfig';
+  kind: 'settings' | 'addTask' | 'agentConfig' | 'newProject';
   agentId?: string;
 }
 
 export interface Store {
+  screen: AppScreen;
+  login: (pin: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  goToProjects: () => void;
+  projects: ProjectRecord[];
+  activeProject: ProjectRecord | null;
+  loadProjects: () => Promise<void>;
+  createProject: (name: string, path: string) => Promise<boolean>;
+  deleteProject: (id: string) => Promise<boolean>;
+  openProject: (project: ProjectRecord) => void;
   page: PageId;
   showPage: (p: PageId) => void;
   rightTab: RightTab;
@@ -101,6 +116,9 @@ export function formatLogTime(): string {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
+  const [screen, setScreen] = useState<AppScreen>('boot');
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
   const [page, setPage] = useState<PageId>('workflow');
   const [rightTab, setRightTab] = useState<RightTab>('logs');
   const [tasks, setTasks] = useState<Task[]>(() => JSON.parse(JSON.stringify(initialTasks)));
@@ -122,6 +140,99 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const showPage = (p: PageId) => setPage(p);
   const switchRightTab = (t: RightTab) => setRightTab(t);
+
+  const login = useCallback(async (pin: string): Promise<boolean> => {
+    try {
+      const res = await api.login(pin);
+      setToken(res.token);
+      setScreen('projects');
+      try {
+        setProjects(await api.listProjects());
+      } catch {
+        setProjects([]);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const logout = useCallback(async (): Promise<void> => {
+    try {
+      await api.logout();
+    } catch {
+      // ignore
+    }
+    setToken(null);
+    setActiveProject(null);
+    setScreen('auth');
+  }, []);
+
+  const loadProjects = useCallback(async (): Promise<void> => {
+    try {
+      setProjects(await api.listProjects());
+    } catch {
+      setProjects([]);
+    }
+  }, []);
+
+  const createProject = useCallback(
+    async (name: string, path: string): Promise<boolean> => {
+      try {
+        const project = await api.createProject(name, path);
+        await loadProjects();
+        setActiveProject(project);
+        setScreen('app');
+        setPage('workflow');
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [loadProjects],
+  );
+
+  const deleteProject = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await api.deleteProject(id);
+      setProjects((list) => list.filter((p) => p.id !== id));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const openProject = useCallback((project: ProjectRecord) => {
+    setActiveProject(project);
+    setScreen('app');
+    setPage('workflow');
+  }, []);
+
+  const goToProjects = useCallback(() => {
+    setActiveProject(null);
+    setScreen('projects');
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (!getToken()) {
+        setScreen('auth');
+        return;
+      }
+      try {
+        await api.authStatus();
+        setScreen('projects');
+        try {
+          setProjects(await api.listProjects());
+        } catch {
+          setProjects([]);
+        }
+      } catch {
+        setToken(null);
+        setScreen('auth');
+      }
+    })();
+  }, []);
 
   const updateGlobalStatus = (
     text: string,
@@ -282,6 +393,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value: Store = {
+    screen,
+    login,
+    logout,
+    goToProjects,
+    projects,
+    activeProject,
+    loadProjects,
+    createProject,
+    deleteProject,
+    openProject,
     page,
     showPage,
     rightTab,

@@ -397,6 +397,27 @@ export class OpenCLIRepository {
     return rows.map((r) => this.mapSession(r));
   }
 
+  // === Settings (key/value) ===
+
+  getSetting(key: string): string | undefined {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any;
+    return row?.value;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, value);
+  }
+
+  getSettingsMap(): Record<string, string> {
+    const rows = this.db.prepare('SELECT key, value FROM settings').all() as any[];
+    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  }
+
   // === Migrations ===
 
   migrate(migrations: Array<{ version: number; sql: string }>): void {

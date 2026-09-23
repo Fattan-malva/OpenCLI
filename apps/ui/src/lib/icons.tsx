@@ -41,6 +41,17 @@ import {
   AlertCircle,
   AlertTriangle,
   X,
+  LogIn,
+  LogOut,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  RefreshCw,
+  HardDrive,
+  ChevronRight,
+  ChevronsUp,
+  KeyRound,
+  Database,
 } from 'lucide-react';
 
 const ICONS: Record<string, LucideIcon> = {
@@ -85,6 +96,17 @@ const ICONS: Record<string, LucideIcon> = {
   'alert-circle': AlertCircle,
   'alert-triangle': AlertTriangle,
   x: X,
+  'log-in': LogIn,
+  'log-out': LogOut,
+  folder: Folder,
+  'folder-open': FolderOpen,
+  'folder-plus': FolderPlus,
+  'refresh-cw': RefreshCw,
+  'hard-drive': HardDrive,
+  'chevron-right': ChevronRight,
+  'chevrons-up': ChevronsUp,
+  'key-round': KeyRound,
+  database: Database,
 };
 
 export function Icon({

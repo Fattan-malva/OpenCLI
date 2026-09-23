@@ -7,6 +7,9 @@ import { WorkflowPage } from './pages/WorkflowPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { WorkspacesPage } from './pages/WorkspacesPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { AuthPage } from './pages/AuthPage';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { StoreProvider, useStore } from './store';
 
 function Shell() {
@@ -21,6 +24,7 @@ function Shell() {
           <AgentsPage active={page === 'agents'} />
           <ModelsPage active={page === 'models'} />
           <WorkspacesPage active={page === 'workspaces'} />
+          <SettingsPage active={page === 'settings'} />
         </main>
         <RightPanel />
       </div>
@@ -30,10 +34,51 @@ function Shell() {
   );
 }
 
+function Gate() {
+  const { screen } = useStore();
+  if (screen === 'boot') {
+    return (
+      <div className="h-screen flex items-center justify-center bg-app-bg">
+        <div className="flex items-center space-x-2 text-app-text">
+          <IconBoot />
+          <span>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+  if (screen === 'auth') {
+    return (
+      <>
+        <AuthPage />
+        <Toasts />
+      </>
+    );
+  }
+  if (screen === 'projects') {
+    return (
+      <>
+        <ProjectsPage />
+        <Modal />
+        <Toasts />
+      </>
+    );
+  }
+  return <Shell />;
+}
+
+function IconBoot() {
+  return (
+    <svg className="w-5 h-5 animate-spin text-app-primary" viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+    </svg>
+  );
+}
+
 export default function App() {
   return (
     <StoreProvider>
-      <Shell />
+      <Gate />
     </StoreProvider>
   );
 }
