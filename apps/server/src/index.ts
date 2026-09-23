@@ -719,6 +719,7 @@ api.get('/projects/:projectId/events', (c) => {
 // --- SSE Events ---
 api.get('/events/stream', (c) => {
   const projectId = c.req.query('projectId');
+  const workflowId = c.req.query('workflowId');
   const taskId = c.req.query('taskId');
   const agentId = c.req.query('agentId');
 
@@ -732,7 +733,7 @@ api.get('/events/stream', (c) => {
     start(controller) {
       const encoder = new TextEncoder();
       const unsubscribe = sseBridge.subscribe(
-        { projectId, taskId, agentId },
+        { projectId, workflowId, taskId, agentId },
         (data) => {
           controller.enqueue(encoder.encode(`data: ${data}\n\n`));
         },
@@ -786,6 +787,12 @@ api.post('/projects/:projectId/workflows', async (c) => {
     name,
     description: body.description,
     status: 'draft',
+  });
+  await eventBus.emit({
+    type: 'workflow.created',
+    projectId,
+    workflowId: workflow.id,
+    payload: { name: workflow.name },
   });
   return c.json(workflow, 201);
 });
@@ -854,12 +861,7 @@ api.get('/workflows/:workflowId/events', (c) => {
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
 
   const limit = Math.min(500, Math.max(1, parseInt(c.req.query('limit') ?? '100', 10)));
-  const tasks = db.listWorkflowTasks(workflow.id);
-  const taskIds = new Set(tasks.map((task) => task.id));
-  const events = db.listEvents({ projectId: workflow.projectId }, limit * 3)
-    .filter((event) => !event.taskId || taskIds.has(event.taskId))
-    .slice(0, limit);
-  return c.json(events);
+  return c.json(db.listEvents({ workflowId: workflow.id }, limit));
 });
 
 
