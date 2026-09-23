@@ -724,7 +724,7 @@ api.get('/projects/:projectId/graph', (c) => {
 // --- Events ---
 api.get('/projects/:projectId/events', (c) => {
   const limit = parseInt(c.req.query('limit') ?? '100', 10);
-  const events = db.listEvents({ projectId: c.req.param('projectId') }, limit);
+  const events = db.listEvents({ projectId: c.req.param('projectId'), workflowId: c.req.query('workflowId') || undefined }, limit);
   return c.json(events);
 });
 
