@@ -845,7 +845,7 @@ api.post('/workflows/:workflowId/pause', async (c) => {
 
   for (const task of db.listWorkflowTasks(workflow.id)) {
     if (task.status === 'running' && task.workspaceId) {
-      const sessions = db.listSessions({ taskId: task.id });
+      const sessions = db.getRunningSessions().filter((session) => session.taskId === task.id);
       const session = sessions.find((item) => item.status === 'running');
       if (session?.processId) {
         await runtime.pause(session.processId);
