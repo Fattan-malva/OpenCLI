@@ -210,7 +210,6 @@ export function TaskCard({ task }: { task: Task }) {
             <h3 className="font-medium text-app-textStrong text-base">{task.title}</h3>
           </div>
           <div className="flex items-center gap-2">
-            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${statusInfo.classes}`}>
             <div
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${statusInfo.classes} ${
                 task.status === 'ASK' ? 'status-shimmer' : ''
@@ -219,6 +218,7 @@ export function TaskCard({ task }: { task: Task }) {
               <Icon name={statusInfo.icon} className="w-3.5 h-3.5" />
               <span>{statusInfo.label}</span>
             </div>
+            <button
               onClick={() => showToast('Task Action', `Opened context menu for ${task.id}`, 'info')}
               className="p-1 text-app-text hover:text-app-textStrong rounded hover:bg-app-hover"
             >
