@@ -63,7 +63,7 @@ export interface Store {
   loadTasks: (projectId: string) => Promise<void>;
   selectWorkflow: (workflow: WorkflowRecord) => Promise<void>;
   paused: boolean;
-  togglePauseAll: () => void;
+  togglePauseAll: () => Promise<void>;
   globalStatus: GlobalStatus;
   updateGlobalStatus: (text: string, color: GlobalStatus['color'], icon: string, pulse: boolean) => void;
   modal: ModalState | null;
@@ -516,6 +516,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeWorkflow,
     loadWorkflows,
     loadTasks,
+    selectWorkflow,
     paused,
     togglePauseAll,
     globalStatus,
