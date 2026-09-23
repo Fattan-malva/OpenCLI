@@ -90,6 +90,29 @@ describe('Scheduler', () => {
     expect(scheduler.getTask('T1')?.status).toBe('cancelled');
   });
 
+  it('blocks parallel execution when file scopes overlap', () => {
+    const bus = new EventBus();
+    const scheduler = new Scheduler(bus, { maxConcurrent: 2 });
+    const a = makeTask({ id: 'T1', workflowId: 'W1', status: 'ready', fileScopes: ['src/auth/**'] });
+    const b = makeTask({ id: 'T2', workflowId: 'W1', status: 'ready', fileScopes: ['src/auth/session.ts'] });
+    scheduler.addTask(a);
+    scheduler.addTask(b);
+    expect(scheduler.canRunTask(a).ok).toBe(true);
+    scheduler.markRunning('T1');
+    expect(scheduler.canRunTask(b).ok).toBe(false);
+    expect(scheduler.canRunTask(b).conflicts).toContain('T1');
+  });
+
+  it('validates workflow dependency cycles', () => {
+    const bus = new EventBus();
+    const scheduler = new Scheduler(bus);
+    scheduler.addTask(makeTask({ id: 'T1', workflowId: 'W1', dependencies: ['T2'] }));
+    scheduler.addTask(makeTask({ id: 'T2', workflowId: 'W1', dependencies: ['T1'] }));
+    const result = scheduler.validateWorkflow('W1');
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.includes('Dependency cycle'))).toBe(true);
+  });
+
   it('builds correct graph', () => {
     const bus = new EventBus();
     const scheduler = new Scheduler(bus);
