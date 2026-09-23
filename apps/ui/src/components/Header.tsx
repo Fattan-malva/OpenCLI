@@ -63,7 +63,6 @@ export function Header() {
           <Icon name="log-out" className="w-4 h-4" />
         </button>
       </div>
-    </header>
       {logoutOpen && <div className="fixed inset-0 z-[100] flex items-center justify-center">
         <div className="absolute inset-0 modal-overlay" onClick={() => setLogoutOpen(false)} />
         <div className="relative w-full max-w-sm mx-4 bg-app-surface border border-app-border rounded-xl shadow-2xl p-5">
