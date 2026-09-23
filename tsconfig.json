@@ -1,0 +1,21 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/events" },
+    { "path": "packages/db" },
+    { "path": "packages/config" },
+    { "path": "packages/security" },
+    { "path": "packages/runtime" },
+    { "path": "packages/discovery" },
+    { "path": "packages/installer" },
+    { "path": "packages/adapter" },
+    { "path": "packages/scheduler" },
+    { "path": "packages/git" },
+    { "path": "packages/workspace" },
+    { "path": "adapters/opencode" },
+    { "path": "adapters/kilocode" },
+    { "path": "adapters/claude" },
+    { "path": "apps/server" }
+  ]
+}
