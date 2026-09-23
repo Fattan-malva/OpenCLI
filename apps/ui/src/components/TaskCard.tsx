@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { AGENTS, STATUS, useStore } from '../store';
 import { Icon } from '../lib/icons';
@@ -195,10 +195,9 @@ export function TaskCard({ task }: { task: Task }) {
 
   return (
     <div className={`relative ${task.dependencies.length > 0 ? 'ml-8' : ''}`}>
-      {task.dependencies.length > 0 && (
-        <div className="absolute -left-6 top-6 w-4 border-b-2 border-app-border rounded-bl-lg border-l-2 h-12 -mt-12"></div>
-      )}
+
       <div
+        data-task-id={task.id}
         className={`task-card bg-app-surface border border-app-border rounded-lg p-4 flex flex-col gap-3 shadow-sm ${
           task.status === 'RUNNING' ? 'ring-1 ring-indigo-500/30' : ''
         }`}
@@ -263,11 +262,74 @@ export function TaskCard({ task }: { task: Task }) {
 
 export function TaskList() {
   const { tasks } = useStore();
+  const flowRef = useRef<HTMLDivElement | null>(null);
+  const [paths, setPaths] = useState<string[]>([]);
+
+  useLayoutEffect(() => {
+    const container = flowRef.current;
+    if (!container) return;
+
+    const updateConnectors = () => {
+      const bounds = container.getBoundingClientRect();
+      const next: string[] = [];
+
+      for (const task of tasks) {
+        if (task.dependencies.length === 0) continue;
+
+        const target = container.querySelector<HTMLElement>(`[data-task-id="` + task.id + `"]`);
+        if (!target) continue;
+
+        const targetRect = target.getBoundingClientRect();
+        const targetX = targetRect.left - bounds.left;
+        const targetY = targetRect.top - bounds.top;
+        const targetEntryX = targetX - 12;
+        const targetEntryY = targetY + 24;
+
+        task.dependencies.forEach((dependency, dependencyIndex) => {
+          const source = container.querySelector<HTMLElement>(`[data-task-id="` + dependency + `"]`);
+          if (!source) return;
+
+          const sourceRect = source.getBoundingClientRect();
+          const sourceX = sourceRect.left - bounds.left + Math.min(48 + dependencyIndex * 12, sourceRect.width - 16);
+          const sourceY = sourceRect.top - bounds.top + sourceRect.height;
+          const laneY = targetY - 12 - dependencyIndex * 8;
+
+          next.push(`M ${sourceX} ${sourceY} V ${laneY} H ${targetEntryX} V ${targetEntryY} H ${targetX}`);
+        });
+      }
+
+      setPaths(next);
+    };
+
+    updateConnectors();
+    const observer = new ResizeObserver(updateConnectors);
+    observer.observe(container);
+    window.addEventListener('resize', updateConnectors);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateConnectors);
+    };
+  }, [tasks]);
+
   return (
-    <>
-      {tasks.map((task) => (
-        <TaskCard key={task.id} task={task} />
-      ))}
-    </>
+    <div ref={flowRef} className="relative">
+      <svg
+        className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
+        aria-hidden="true"
+      >
+        <g fill="none" stroke="rgb(63 63 70 / 0.9)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          {paths.map((path, index) => (
+            <path key={index} d={path} />
+          ))}
+        </g>
+      </svg>
+
+      <div className="relative z-10 space-y-4">
+        {tasks.map((task) => (
+          <TaskCard key={task.id} task={task} />
+        ))}
+      </div>
+    </div>
   );
 }
