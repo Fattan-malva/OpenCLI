@@ -65,7 +65,7 @@ export function TaskCard({ task }: { task: Task }) {
         await api.sendTaskInput(task.id, reply);
         addLog('user.input', `Answered ${task.id}: "${reply}"`);
         showToast('Reply Sent', 'Adapter has resumed execution.', 'success');
-        updateTask((t) => ({ ...t, status: 'RUNNING', agentQuestion: undefined, agentRequest: undefined, liveRequest: undefined }));
+        updateTask((t) => ({ ...t, status: 'RUNNING', agentRequest: undefined, liveRequest: undefined }));
         addLog('task.resumed', `Task ${task.id} resumed after user input.`, 'system', task.id);
         updateGlobalStatus('Orchestrating (Active)', 'indigo', 'loader-2', true);
         setReply('');
