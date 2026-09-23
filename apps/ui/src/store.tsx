@@ -422,18 +422,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => dismissToast(id), 4000);
   };
 
-  const togglePauseAll = () => {
-    if (paused) {
-      addLog('system.command', 'Resuming all active agents.');
-      setTasks((prev) => prev.map((t) => (t.status === 'PAUSED' ? { ...t, status: 'RUNNING' } : t)));
-      updateGlobalStatus('Orchestrating (2 Agents Active)', 'indigo', 'loader-2', true);
-    } else {
-      addLog('system.command', 'Pause signal sent to all agents.');
-      setTasks((prev) => prev.map((t) => (t.status === 'RUNNING' ? { ...t, status: 'PAUSED' } : t)));
-      updateGlobalStatus('System Paused', 'amber', 'pause-circle', false);
+  const togglePauseAll = useCallback(async (): Promise<void> => {
+    if (!activeWorkflow) {
+      showToast('No Workflow', 'There is no active workflow to pause or resume.', 'warning');
+      return;
     }
-    setPaused((p) => !p);
-  };
+
+    try {
+      if (activeWorkflow.status === 'running') {
+        await api.pauseWorkflow(activeWorkflow.id);
+        setPaused(true);
+        updateGlobalStatus('Workflow Paused', 'amber', 'pause-circle', false);
+        addLog('workflow.paused', `Paused workflow ${activeWorkflow.id}`, 'system');
+      } else if (activeWorkflow.status === 'paused') {
+        await api.resumeWorkflow(activeWorkflow.id);
+        setPaused(false);
+        updateGlobalStatus('Workflow Running', 'indigo', 'loader-2', true);
+        addLog('workflow.resumed', `Resumed workflow ${activeWorkflow.id}`, 'system');
+      }
+
+      const projectId = activeProject?.id ?? activeWorkflow.projectId;
+      await Promise.all([loadWorkflows(projectId), loadTasks(projectId)]);
+    } catch (error: any) {
+      showToast('Workflow Error', error?.message ?? 'Unable to change workflow state.', 'error');
+    }
+  }, [activeWorkflow, activeProject?.id, loadWorkflows, loadTasks, showToast]);
 
   const saveAgentConfig = (agentId: string, modes: AgentConfigs[string]['modes']) => {
     setAgentConfigs((prev) => ({ ...prev, [agentId]: { modes } }));
