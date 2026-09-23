@@ -267,13 +267,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setActiveWorkflow(workflow);
       setTasks([]);
       setModal(null);
-      await loadTasks(workflow.id);
+      const createdTasks = await api.getWorkflowTasks(workflow.id);
+      setTasks(createdTasks.map(mapBackendTask));
       addLog('workflow.created', `Workflow created: ${workflow.name}`, 'system');
       return true;
     } catch {
       return false;
     }
-  }, [activeProject?.id, loadTasks, addLog]);
+  }, [activeProject?.id, addLog]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
