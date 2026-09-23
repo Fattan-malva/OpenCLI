@@ -29,14 +29,20 @@ export function configureWorkflowRuntime(deps: WorkflowRuntime): void {
 }
 
 export function restoreRunningWorkflows(deps: WorkflowRuntime): void {
-  for (const workflow of listRunningWorkflows(deps)) {
-    const tasks = deps.db.listWorkflowTasks(workflow.id);
-    deps.scheduler.loadTasks(tasks);
-    deps.scheduler.startWorkflow(workflow.id).catch(() => undefined);
-  }
+  const runningWorkflowIds = new Set(listRunningWorkflows(deps).map((workflow) => workflow.id));
 
   for (const project of deps.db.listProjects()) {
-    deps.scheduler.loadTasks(deps.db.listTasks(project.id));
+    const tasks = deps.db.listTasks(project.id).map((task) => {
+      if (task.workflowId && runningWorkflowIds.has(task.workflowId) && (task.status === 'running' || task.status === 'paused')) {
+        return deps.db.updateTask(task.id, { status: 'pending' }) ?? task;
+      }
+      return task;
+    });
+    deps.scheduler.loadTasks(tasks);
+  }
+
+  for (const workflowId of runningWorkflowIds) {
+    deps.scheduler.startWorkflow(workflowId).catch(() => undefined);
   }
 }
 
