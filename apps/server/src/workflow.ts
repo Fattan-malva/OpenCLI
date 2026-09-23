@@ -60,7 +60,7 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
   const requestedAdapterId = task.agentId ?? project.defaultAgent;
   const route = await deps.adapterRouter.resolve({
     preferredAdapterId: requestedAdapterId,
-    requiredCapabilities: ['coding'],
+    requiredCapabilities: task.requiredCapabilities?.length ? task.requiredCapabilities : ['coding'],
   });
 
   if (!route) {
