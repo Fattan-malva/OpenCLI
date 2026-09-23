@@ -290,7 +290,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const loadEvents = useCallback(async (projectId: string): Promise<void> => {
     try {
-      const events = await api.listEvents(projectId, 200);
+      const events = await api.listEvents(projectId, 200, activeWorkflow?.id);
       setLogs(events.reverse().map((event) => ({
         time: new Date(event.timestamp).toLocaleTimeString('en-US', {
           hour12: false,
@@ -307,7 +307,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setLogs([]);
     }
-  }, []);
+  }, [activeWorkflow?.id]);
 
   const createProject = useCallback(
     async (name: string, path: string): Promise<boolean> => {
