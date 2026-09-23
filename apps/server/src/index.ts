@@ -21,7 +21,7 @@ import { join, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { probeCapabilities } from './cli.js';
-import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes } from './sessions.js';
+import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes, stopAll as stopAllProjectSessions } from './sessions.js';
 import { configureWorkflowRuntime, refreshWorkflow, restoreRunningWorkflows } from './workflow.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
@@ -558,6 +558,23 @@ api.post('/projects/:projectId/sessions/start', async (c) => {
     payload: { adapterId, status: state.status, pid: state.pid },
   });
   return c.json(state, state.status === 'failed' ? 500 : 200);
+});
+
+api.post('/projects/:projectId/sessions/stop-all', async (c) => {
+  const projectId = c.req.param('projectId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  await stopAllProjectSessions(projectId);
+  for (const { definition } of discoverAllAgents()) {
+    await eventBus.emit({
+      type: 'agent.stopped',
+      agentId: definition.id,
+      projectId,
+      payload: { adapterId: definition.id, reason: 'project-switch-or-logout' },
+    });
+  }
+  return c.json({ success: true });
 });
 
 api.post('/projects/:projectId/sessions/stop', async (c) => {
