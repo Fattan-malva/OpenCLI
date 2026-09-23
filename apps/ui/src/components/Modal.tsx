@@ -7,7 +7,7 @@ import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, tasks } = useStore();
+  const { modal, closeModal, agentConfigs, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -110,7 +110,7 @@ export function Modal() {
               setDependencies={setDependencies}
               fileScopes={fileScopes}
               setFileScopes={setFileScopes}
-              availableTasks={tasks.filter((task) => task.workflowId === activeProject?.id || task.workflowId)}
+              availableTasks={tasks.filter((task) => task.workflowId === activeWorkflow?.id)}
               adapters={adapters.filter((adapter) => adapter.installed && adapter.active)}
               modes={availableModes}
             />
