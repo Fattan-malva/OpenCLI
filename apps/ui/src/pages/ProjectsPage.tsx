@@ -215,6 +215,7 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  const isFilesystemRoot = selectedPath === '__roots__';
 
   const load = async (path?: string) => {
     setBusy(true);
@@ -292,7 +293,7 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
             </label>
             <div className="border border-app-border rounded-lg overflow-hidden">
               <div className="flex items-center justify-between gap-2 px-3 py-2 bg-app-bg border-b border-app-border">
-                <span className="font-mono text-xs text-app-info truncate" title={folder?.path}>
+                <span className="font-mono text-xs text-app-info truncate" title={folder?.path === '__roots__' ? (navigator.platform.toLowerCase().includes('win') ? 'This PC' : '/') : folder?.path}>
                   {folder?.path}
                 </span>
                 <div className="flex items-center gap-1 shrink-0">
@@ -375,18 +376,18 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
           </button>
           <button
             onClick={openExisting}
-            disabled={!selectedPath || creating || busy}
+            disabled={!selectedPath || isFilesystemRoot || creating || busy}
             className="px-4 py-2 rounded text-sm text-app-text bg-app-hover hover:bg-app-border transition-colors disabled:opacity-50 flex items-center gap-2"
-            title="Pakai folder terpilih langsung sebagai workspace (folder tidak dibuat baru)"
+            title={isFilesystemRoot ? 'Pilih drive atau folder terlebih dahulu' : 'Pakai folder terpilih langsung sebagai workspace (folder tidak dibuat baru)'}
           >
             <Icon name="folder-open" className="w-4 h-4" />
             Open
           </button>
           <button
             onClick={submit}
-            disabled={!selectedPath || !name.trim() || creating || busy}
+            disabled={!selectedPath || isFilesystemRoot || !name.trim() || creating || busy}
             className="px-4 py-2 rounded bg-app-primary hover:bg-indigo-600 text-white text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
-            title="Buat folder baru <nama> di lokasi terpilih, lalu jadikan workspace"
+            title={isFilesystemRoot ? 'Pilih drive atau folder terlebih dahulu' : 'Buat folder baru <nama> di lokasi terpilih, lalu jadikan workspace'}
           >
             {creating ? <Icon name="loader-2" className="w-4 h-4 animate-spin" /> : <Icon name="plus" className="w-4 h-4" />}
             Create
