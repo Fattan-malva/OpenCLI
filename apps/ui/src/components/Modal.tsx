@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { AGENTS, providerRegistry, useStore } from '../store';
 import { api } from '../lib/api';
-import type { AdapterInfo, AdapterMode } from '../lib/types';
+import type { AdapterInfo, AdapterMode, Task } from '../lib/types';
 import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
