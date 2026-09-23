@@ -693,9 +693,13 @@ api.post('/tasks/:id/start', async (c) => {
   if (!task.workflowId) return c.json({ error: 'Task is not attached to a workflow' }, 400);
 
   loadWorkflowIntoScheduler(task.workflowId);
-  const result = await scheduler.startWorkflow(task.workflowId);
-  if (!result.started) return c.json({ error: result.errors.join('; ') }, 409);
   db.updateWorkflow(task.workflowId, { status: 'running' });
+  const result = await scheduler.startWorkflow(task.workflowId);
+  if (!result.started) {
+    db.updateWorkflow(task.workflowId, { status: 'draft' });
+    return c.json({ error: result.errors.join('; ') }, 409);
+  }
+  refreshWorkflow(workflowRuntime, task.workflowId);
   return c.json({ success: true, taskId: task.id, workflowId: task.workflowId });
 });
 
@@ -832,10 +836,14 @@ api.post('/workflows/:workflowId/start', async (c) => {
   const tasks = db.listWorkflowTasks(workflow.id);
   if (tasks.length === 0) return c.json({ error: 'Workflow has no tasks' }, 400);
 
-  const result = await scheduler.startWorkflow(workflow.id);
-  if (!result.started) return c.json({ error: result.errors.join('; '), details: result.errors }, 409);
-
   db.updateWorkflow(workflow.id, { status: 'running' });
+  const result = await scheduler.startWorkflow(workflow.id);
+  if (!result.started) {
+    db.updateWorkflow(workflow.id, { status: 'draft' });
+    return c.json({ error: result.errors.join('; '), details: result.errors }, 409);
+  }
+
+  refreshWorkflow(workflowRuntime, workflow.id);
   return c.json({ workflow: db.getWorkflow(workflow.id), stats: scheduler.getStats() });
 });
 
