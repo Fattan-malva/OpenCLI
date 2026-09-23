@@ -147,7 +147,7 @@ export function RightPanel() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-sm font-semibold text-app-textStrong">Agent Todo</div>
-              <div className="text-[10px] text-app-text mt-0.5">AI-generated execution plan</div>
+              <div className="text-[10px] text-app-text mt-0.5">Live workflow task state</div>
             </div>
             <span className="text-[10px] font-mono text-app-text bg-app-bg border border-app-border rounded px-2 py-1">
               {todoGroups.done.length}/{tasks.length}
