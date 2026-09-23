@@ -83,6 +83,7 @@ export interface Task {
   modelId?: string;
   workspaceId?: string;
   fileScopes: string[];
+  requiredCapabilities?: string[];
   retryCount: number;
   maxRetries: number;
   createdAt: string;
