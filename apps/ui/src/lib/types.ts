@@ -23,6 +23,8 @@ export interface Task {
   dependencies: string[];
   agentRequest?: AdapterRequest;
   agentDiff?: string[];
+  liveOutput?: string;
+  liveRequest?: AdapterRequest;
 }
 
 export interface AdapterMeta {
