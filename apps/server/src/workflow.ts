@@ -82,8 +82,20 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
   deps.workspaceService.registerFileScope(task.id, task.fileScopes);
 
   const gitInfo = deps.gitService.getInfo(project.path);
-  const worktree = gitInfo.isRepository ? deps.gitService.createWorktree(project.path, task.id) : undefined;
+  const shouldIsolate = gitInfo.isRepository && !gitInfo.hasUncommittedChanges;
+  const worktree = shouldIsolate ? deps.gitService.createWorktree(project.path, task.id) : undefined;
   const workspacePath = worktree?.path ?? project.path;
+
+  if (gitInfo.isRepository && gitInfo.hasUncommittedChanges) {
+    deps.eventBus.emit({
+      type: 'workspace.created',
+      projectId: project.id,
+      taskId: task.id,
+      workflowId: task.workflowId,
+      agentId: adapterId,
+      payload: { path: project.path, mode: 'shared-dirty-worktree', isolated: false },
+    }).catch(() => undefined);
+  }
 
   if (worktree) {
     const persisted = deps.db.createWorkspace({
@@ -166,9 +178,50 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
       exitCode: result?.exitCode,
     });
 
-    return success
-      ? { success: true }
-      : { success: false, error: deps.runtime.getErrors(processId) || `Agent exited with code ${result?.exitCode ?? 'unknown'}` };
+    if (!success) {
+      return {
+        success: false,
+        error: deps.runtime.getErrors(processId) || `Agent exited with code ${result?.exitCode ?? 'unknown'}`,
+      };
+    }
+
+    if (worktree) {
+      const diff = deps.gitService.getDiff(worktree.path);
+      if (diff.trim()) {
+        const commit = deps.gitService.commit(worktree.path, `opencli: ${task.title}`);
+        if (!commit.success) {
+          if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'conflict' });
+          return { success: false, error: commit.error ?? 'Could not commit workflow changes' };
+        }
+
+        const merge = deps.gitService.merge(project.path, worktree.branch);
+        if (!merge.success) {
+          if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'conflict' });
+          deps.eventBus.emit({
+            type: 'workspace.conflict',
+            projectId: project.id,
+            workflowId: task.workflowId,
+            taskId: task.id,
+            agentId: adapterId,
+            payload: { branch: worktree.branch, error: merge.error },
+          }).catch(() => undefined);
+          return { success: false, error: merge.error ?? 'Could not merge workflow changes' };
+        }
+      }
+
+      deps.gitService.removeWorktree(project.path, task.id);
+      if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'released' });
+      deps.eventBus.emit({
+        type: 'workspace.released',
+        projectId: project.id,
+        workflowId: task.workflowId,
+        taskId: task.id,
+        agentId: adapterId,
+        payload: { path: worktree.path, branch: worktree.branch },
+      }).catch(() => undefined);
+    }
+
+    return { success: true };
   } catch (error: any) {
     if (sessionId) {
       deps.db.updateSession(sessionId, {
