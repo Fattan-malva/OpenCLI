@@ -1,6 +1,6 @@
-import type { AgentConfigs, AgentMeta, Task, TaskStatus, Workspace } from './types';
+import type { AdapterConfigs, AdapterMeta, Task, TaskStatus, Workspace } from './types';
 
-export const AGENTS: Record<string, AgentMeta> = {
+export const ADAPTERS: Record<string, AdapterMeta> = {
   system: { name: 'OpenCLI Core', icon: 'server', color: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/20' },
   claude: { name: 'Claude (Opus)', icon: 'cpu', color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' },
   codex: { name: 'Codex Agent', icon: 'code-2', color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
@@ -94,7 +94,7 @@ export const providerRegistry: Record<string, string[]> = {
   'Ollama (Local)': ['llama3', 'qwen2'],
 };
 
-export const initialAgentConfigs: AgentConfigs = {
+export const initialAdapterConfigs: AdapterConfigs = {
   claude: {
     modes: {
       plan: { provider: 'Anthropic', model: 'claude-3-opus-20240229' },
