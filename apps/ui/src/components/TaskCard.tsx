@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { AGENTS, STATUS, useStore } from '../store';
+import { ADAPTERS, STATUS, useStore } from '../store';
 import { Icon } from '../lib/icons';
 import type { Task } from '../lib/types';
 
@@ -8,7 +8,7 @@ export function TaskCard({ task }: { task: Task }) {
   const { setTasks, addLog, showToast, updateGlobalStatus } = useStore();
   const [reply, setReply] = useState('');
   const statusInfo = STATUS[task.status];
-  const agentInfo = AGENTS[task.agentId] ?? {
+  const agentInfo = ADAPTERS[task.agentId] ?? {
     name: task.agentId || 'Auto-routed adapter',
     icon: 'terminal',
     color: 'text-app-text',
@@ -86,7 +86,7 @@ export function TaskCard({ task }: { task: Task }) {
           <div className="flex items-start gap-2 text-sky-300 text-sm">
             <Icon name="bot" className="w-4 h-4 mt-0.5 shrink-0" />
             <span>
-              <strong className="text-sky-200 block mb-1">Agent Request:</strong> {req.message}
+              <strong className="text-sky-200 block mb-1">Adapter Request:</strong> {req.message}
             </span>
           </div>
           <form onSubmit={replyTask} className="flex gap-2">
