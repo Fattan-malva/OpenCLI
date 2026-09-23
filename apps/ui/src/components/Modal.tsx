@@ -119,6 +119,7 @@ export function Modal() {
               description={workflowDesc}
               createWorkflow={createWorkflow}
               closeModal={closeModal}
+              showToast={showToast}
             />
           )}
           {modal.kind === 'addTask' && <AddTaskFooter />}
@@ -151,7 +152,7 @@ function NewWorkflowBody({
   setDescription: (value: string) => void;
 }) {
   return (
-    <form id="new-workflow-form" className="space-y-4 text-sm">
+    <div className="space-y-4 text-sm">
       <div>
         <label className="block text-app-text mb-1 font-medium">Workflow Name</label>
         <input
@@ -173,7 +174,7 @@ function NewWorkflowBody({
           className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
         />
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -182,11 +183,13 @@ function NewWorkflowFooter({
   description,
   createWorkflow,
   closeModal,
+  showToast,
 }: {
   name: string;
   description: string;
   createWorkflow: (name: string, description?: string) => Promise<boolean>;
   closeModal: () => void;
+  showToast: (title: string, message: string, type?: 'info' | 'success' | 'error' | 'warning') => void;
 }) {
   return (
     <>
@@ -194,11 +197,18 @@ function NewWorkflowFooter({
         Cancel
       </button>
       <button
-        form="new-workflow-form"
-        type="submit"
-        onClick={(event) => {
-          event.preventDefault();
-          void createWorkflow(name, description);
+        type="button"
+        onClick={async () => {
+          if (!name.trim()) {
+            showToast('Workflow Name Required', 'Enter a workflow name before creating it.', 'warning');
+            return;
+          }
+          const created = await createWorkflow(name.trim(), description.trim());
+          showToast(
+            created ? 'Workflow Created' : 'Workflow Failed',
+            created ? `${name.trim()} is ready for tasks.` : 'Unable to create workflow.',
+            created ? 'success' : 'error',
+          );
         }}
         className="px-4 py-2 rounded bg-app-primary hover:bg-indigo-600 text-white transition-colors"
       >
