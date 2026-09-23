@@ -4,7 +4,6 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { adapterCommand } from '@opencli/discovery';
-import { probeCapabilities } from './cli.js';
 
 export interface SessionState {
   projectId: string;
@@ -71,6 +70,46 @@ async function requestJson(
   return { ok: response.ok, status: response.status, data };
 }
 
+async function listRemoteAgents(baseUrl: string): Promise<Array<{ id: string; name: string; mode: string; hidden?: boolean }>> {
+  for (const path of ['/api/agent', '/agent']) {
+    try {
+      const response = await requestJson(baseUrl + path, {}, 5000);
+      if (!response.ok) continue;
+      const raw = response.data?.data ?? response.data;
+      if (!Array.isArray(raw)) continue;
+      return raw
+        .filter((agent: any) => agent && typeof agent.name === 'string')
+        .map((agent: any) => ({
+          id: String(agent.id ?? agent.name),
+          name: String(agent.name),
+          mode: String(agent.mode ?? 'all'),
+          hidden: Boolean(agent.hidden),
+        }));
+    } catch {
+      // Try the compatibility endpoint below.
+    }
+  }
+  return [];
+}
+
+async function remoteConfigModel(baseUrl: string): Promise<{ provider: string; model: string } | undefined> {
+  for (const path of ['/api/config', '/config', '/global/config', '/api/global/config']) {
+    try {
+      const response = await requestJson(baseUrl + path, {}, 5000);
+      if (!response.ok) continue;
+      const raw = response.data?.data ?? response.data;
+      const spec = typeof raw?.model === 'string' ? raw.model : '';
+      const index = spec.indexOf('/');
+      if (index > 0 && spec.slice(index + 1)) {
+        return { provider: spec.slice(0, index), model: spec.slice(index + 1) };
+      }
+    } catch {
+      // Try the next compatibility endpoint.
+    }
+  }
+  return undefined;
+}
+
 async function waitForServer(baseUrl: string, timeoutMs = 15_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -92,15 +131,23 @@ async function createRemoteSession(entry: SessionEntry): Promise<void> {
 
   await waitForServer(entry.serverUrl);
 
-  const capabilities = await probeCapabilities(entry.adapterId, true).catch(() => undefined);
-  const activeMode = capabilities?.current.mode || capabilities?.modes[0]?.id;
-  const activeProvider = capabilities?.current.provider;
-  const activeModel = capabilities?.current.model;
+  // Read runtime agents from the running server instead of parsing CLI text.
+  // This keeps project-local Plan/Build/custom agents aligned with reality.
+  const agents = await listRemoteAgents(entry.serverUrl);
+  const selectable = agents.filter((agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'));
+  const activeAgent =
+    selectable.find((agent) => agent.name === 'build') ??
+    selectable.find((agent) => agent.name === 'plan') ??
+    selectable[0];
+
+  // Pin the configured model when the server exposes one so a headless
+  // session does not silently resolve to an unrelated catalog default.
+  const configuredModel = await remoteConfigModel(entry.serverUrl);
 
   const body: Record<string, unknown> = {};
-  if (activeMode) body.agent = activeMode;
-  if (activeProvider && activeModel) {
-    body.model = { providerID: activeProvider, id: activeModel };
+  if (activeAgent) body.agent = activeAgent.id;
+  if (configuredModel) {
+    body.model = { providerID: configuredModel.provider, id: configuredModel.model };
   }
 
   let created: any;
@@ -126,9 +173,9 @@ async function createRemoteSession(entry: SessionEntry): Promise<void> {
   }
 
   entry.sessionId = String(sessionId);
-  entry.activeMode = activeMode;
-  entry.activeProvider = activeProvider;
-  entry.activeModel = activeModel;
+  entry.activeMode = activeAgent?.id;
+  entry.activeProvider = configuredModel?.provider;
+  entry.activeModel = configuredModel?.model;
 }
 
 async function postSessionRuntime(
@@ -334,6 +381,19 @@ export function stopAll(projectId: string): void {
     if (entry.projectId !== projectId) continue;
     SESSIONS.delete(k);
   }
+}
+
+export async function getSessionAgentModes(
+  projectId: string,
+  adapterId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const entry = SESSIONS.get(key(projectId, adapterId));
+  if (!entry?.serverUrl || !SERVE_ADAPTERS.has(adapterId)) return [];
+
+  const agents = await listRemoteAgents(entry.serverUrl);
+  return agents
+    .filter((agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'))
+    .map((agent) => ({ id: agent.id, name: agent.name }));
 }
 
 export async function setSessionMode(
