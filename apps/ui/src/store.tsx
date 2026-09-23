@@ -255,7 +255,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setTasks([]);
     }
-  }, [activeProject?.id, loadEvents]);
+  }, [activeProject?.id]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
@@ -263,6 +263,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTasks(list.map(mapBackendTask));
     } catch {
       setTasks([]);
+    }
+  }, []);
+
+  const loadEvents = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const events = await api.listEvents(projectId, 200);
+      setLogs(events.reverse().map((event) => ({
+        time: new Date(event.timestamp).toLocaleTimeString('en-US', {
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          fractionalSecondDigits: 3,
+        } as Intl.DateTimeFormatOptions),
+        type: event.type,
+        message: event.payload,
+        agentId: event.agentId,
+        taskId: event.taskId,
+      })));
+    } catch {
+      setLogs([]);
     }
   }, []);
 
@@ -313,27 +334,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [adapters]);
 
-  const loadEvents = useCallback(async (projectId: string): Promise<void> => {
-    try {
-      const events = await api.listEvents(projectId, 200);
-      setLogs(events.reverse().map((event) => ({
-        time: new Date(event.timestamp).toLocaleTimeString('en-US', {
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          fractionalSecondDigits: 3,
-        } as Intl.DateTimeFormatOptions),
-        type: event.type,
-        message: event.payload,
-        agentId: event.agentId,
-        taskId: event.taskId,
-      })));
-    } catch {
-      setLogs([]);
-    }
-  }, []);
-
   const loadSessions = useCallback(async (projectId: string): Promise<void> => {
     try {
       setSessions(await api.listSessions(projectId));
@@ -357,7 +357,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTasks([]);
     setLogs([]);
     void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
-  }, [loadSessions, loadTasks, loadWorkflows]);
+  }, [loadSessions, loadTasks, loadWorkflows, loadEvents]);
 
   useEffect(() => {
     if (screen !== 'app' || !activeProject || !getToken()) return;
