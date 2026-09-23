@@ -1,7 +1,7 @@
 export type PageId = 'workflow' | 'agents' | 'models' | 'workspaces' | 'settings';
 export type RightTab = 'todo' | 'logs' | 'context';
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
-export type TaskStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'COMPLETED' | 'FAILED';
+export type TaskStatus = 'PENDING' | 'READY' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'BLOCKED' | 'COMPLETED' | 'FAILED';
 export type AgentRequestType = 'question' | 'permission' | 'choice';
 
 export interface AgentRequest {
@@ -13,6 +13,7 @@ export interface AgentRequest {
 
 export interface Task {
   id: string;
+  workflowId?: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -152,4 +153,13 @@ export interface AdapterSession {
   activeMode?: string;
   activeProvider?: string;
   activeModel?: string;
+}
+export interface WorkflowRecord {
+  id: string;
+  projectId: string;
+  name: string;
+  description?: string;
+  status: 'draft' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
 }
