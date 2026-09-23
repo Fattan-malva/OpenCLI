@@ -61,6 +61,7 @@ export interface Store {
   activeWorkflow: WorkflowRecord | null;
   loadWorkflows: (projectId: string) => Promise<void>;
   loadTasks: (projectId: string) => Promise<void>;
+  selectWorkflow: (workflow: WorkflowRecord) => Promise<void>;
   paused: boolean;
   togglePauseAll: () => void;
   globalStatus: GlobalStatus;
@@ -231,12 +232,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const list = await api.listWorkflows(projectId);
       setWorkflows(list);
-      setActiveWorkflow(list.find((workflow) => workflow.status === 'running' || workflow.status === 'paused') ?? list[0] ?? null);
+      setActiveWorkflow((current) => {
+        if (current) {
+          const refreshed = list.find((workflow) => workflow.id === current.id);
+          if (refreshed) return refreshed;
+        }
+        return list.find((workflow) => workflow.status === 'running' || workflow.status === 'paused') ?? list[0] ?? null;
+      });
     } catch {
       setWorkflows([]);
       setActiveWorkflow(null);
     }
   }, []);
+
+  const selectWorkflow = useCallback(async (workflow: WorkflowRecord): Promise<void> => {
+    setActiveWorkflow(workflow);
+    if (!activeProject) return;
+    try {
+      const list = await api.getWorkflowTasks(workflow.id);
+      setTasks(list.map(mapBackendTask));
+    } catch {
+      setTasks([]);
+    }
+  }, [activeProject?.id]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
