@@ -89,9 +89,13 @@ export class KiloCodeAdapter implements AgentAdapter {
   }
 
   buildCommand(context: AgentContext): CommandSpec {
-    const args: string[] = [];
-    // Kilo Code may use -p for non-interactive mode
-    args.push('-p', context.taskDescription);
+    const args: string[] = ['run', context.taskDescription];
+    // Kilo's non-interactive execution is the `run` subcommand. `-p` is not
+    // a valid Kilo flag and causes the CLI to print its help and exit.
+    if (context.mode) args.push('--agent', context.mode);
+    if (context.model?.provider && context.model.model) {
+      args.push('--model', `${context.model.provider}/${context.model.model}`);
+    }
 
     return {
       executable: this.executablePath ?? 'kilocode',
