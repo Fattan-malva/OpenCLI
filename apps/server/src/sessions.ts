@@ -307,14 +307,9 @@ export async function startSession(opts: {
   if (state.pid) state.status = 'running';
   SESSIONS.set(key(projectId, adapterId), state);
 
-  try {
-    await createRemoteSession(state);
-  } catch (error: any) {
-    // Keep the adapter process alive even if its optional HTTP control plane is unavailable.
-    state.error = error?.message ?? 'Failed to initialize runtime session';
-    console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
-  }
-
+  // Attach lifecycle listeners immediately after spawn. OpenCode may exit
+  // before its HTTP control plane finishes initializing, and we must not miss
+  // that transition or leave the session stuck in "running".
   child.stdout?.on('data', (data) => {
     console.log(`[${adapterId}] stdout:`, data.toString());
   });
@@ -343,6 +338,14 @@ export async function startSession(opts: {
       current.child = undefined;
     }
   });
+
+  try {
+    await createRemoteSession(state);
+  } catch (error: any) {
+    // Keep the adapter process alive even if its optional HTTP control plane is unavailable.
+    state.error = error?.message ?? 'Failed to initialize runtime session';
+    console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
+  }
 
   return { ...state, status: alive(state) ? 'running' : state.status };
 }
