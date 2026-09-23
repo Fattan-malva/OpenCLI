@@ -96,6 +96,11 @@ export const api = {
   getCapabilities(id: string, force = false) {
     return request<AdapterCapabilities>(`/adapters/${encodeURIComponent(id)}/capabilities${force ? '?force=1' : ''}`);
   },
+  getProjectAdapterCapabilities(projectId: string, adapterId: string) {
+    return request<AdapterCapabilities>(
+      `/projects/${encodeURIComponent(projectId)}/adapters/${encodeURIComponent(adapterId)}/capabilities`,
+    );
+  },
   getModelRouting(projectId: string) {
     return request<Record<string, Record<string, { provider: string; model: string }>>>(
       `/projects/${encodeURIComponent(projectId)}/model-routing`,
