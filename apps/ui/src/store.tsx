@@ -152,6 +152,8 @@ function logTypeColor(type: string): string {
   if (type.includes('completed') || type.includes('success')) return 'text-emerald-400';
   if (type.includes('started') || type.includes('ready')) return 'text-indigo-400';
   if (type.includes('conflict') || type.includes('permission')) return 'text-amber-400';
+  if (type.includes('question')) return 'text-sky-300';
+  if (type.includes('confirmation') || type.includes('permission')) return 'text-amber-300';
   if (type.includes('output')) return 'text-slate-300';
   return 'text-app-text';
 }
