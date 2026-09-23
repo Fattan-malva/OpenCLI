@@ -387,7 +387,9 @@ export class Scheduler {
         }
 
         this.markRunning(task.id);
-        this.executeTask(task).catch(() => undefined);
+        this.executeTask(task).catch((error) => {
+          this.markFailed(task.id, error?.message ?? 'Task execution failed');
+        });
       }
     } finally {
       this.ticking = false;
