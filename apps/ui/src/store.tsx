@@ -227,6 +227,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loadWorkflows = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const list = await api.listWorkflows(projectId);
+      setWorkflows(list);
+      setActiveWorkflow(list.find((workflow) => workflow.status === 'running' || workflow.status === 'paused') ?? list[0] ?? null);
+    } catch {
+      setWorkflows([]);
+      setActiveWorkflow(null);
+    }
+  }, []);
+
+  const loadTasks = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const list = await api.listTasks(projectId);
+      setTasks(list.map(mapBackendTask));
+    } catch {
+      setTasks([]);
+    }
+  }, []);
+
   const createProject = useCallback(
     async (name: string, path: string): Promise<boolean> => {
       try {
@@ -273,26 +293,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [adapters]);
 
-  const loadWorkflows = useCallback(async (projectId: string): Promise<void> => {
-    try {
-      const list = await api.listWorkflows(projectId);
-      setWorkflows(list);
-      setActiveWorkflow(list.find((workflow) => workflow.status === 'running' || workflow.status === 'paused') ?? list[0] ?? null);
-    } catch {
-      setWorkflows([]);
-      setActiveWorkflow(null);
-    }
-  }, []);
-
-  const loadTasks = useCallback(async (projectId: string): Promise<void> => {
-    try {
-      const list = await api.listTasks(projectId);
-      setTasks(list.map(mapBackendTask));
-    } catch {
-      setTasks([]);
-    }
-  }, []);
-
   const loadSessions = useCallback(async (projectId: string): Promise<void> => {
     try {
       setSessions(await api.listSessions(projectId));
@@ -316,6 +316,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTasks([]);
     void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadSessions(project.id)]);
   }, [loadSessions, loadTasks, loadWorkflows]);
+
+  useEffect(() => {
+    if (screen !== 'app' || !activeProject || !getToken()) return;
+
+    const stream = new EventSource(`/api/events/stream?projectId=${encodeURIComponent(activeProject.id)}`);
+    let refreshTimer: number | undefined;
+
+    const scheduleRefresh = () => {
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        void Promise.all([loadWorkflows(activeProject.id), loadTasks(activeProject.id), loadSessions(activeProject.id)]);
+      }, 120);
+    };
+
+    stream.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as { type?: string; projectId?: string };
+        if (!event.type || event.type === 'connected') return;
+        if (!event.projectId || event.projectId === activeProject.id) scheduleRefresh();
+      } catch {
+        // Ignore malformed event payloads.
+      }
+    };
+
+    return () => {
+      stream.close();
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+    };
+  }, [screen, activeProject?.id, loadWorkflows, loadTasks, loadSessions]);
 
   useEffect(() => {
     if (screen === 'app') {
