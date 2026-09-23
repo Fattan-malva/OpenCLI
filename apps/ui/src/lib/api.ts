@@ -199,7 +199,7 @@ export const api = {
   cancelWorkflow(workflowId: string) {
     return request<WorkflowRecord>(`/workflows/${encodeURIComponent(workflowId)}/cancel`, { method: 'POST' });
   },
-  listEvents(projectId: string, limit = 200) {
+  listEvents(projectId: string, limit = 200, workflowId?: string) {
     return request<Array<{
       id: string;
       type: string;
@@ -209,7 +209,7 @@ export const api = {
       agentId?: string;
       timestamp: string;
       payload: Record<string, unknown>;
-    }>>(`/projects/${encodeURIComponent(projectId)}/events?limit=${Math.min(500, Math.max(1, limit))}`);
+    }>>(`/projects/${encodeURIComponent(projectId)}/events?limit=${Math.min(500, Math.max(1, limit))}${workflowId ? `&workflowId=${encodeURIComponent(workflowId)}` : ''}`);
   },
 
   listTasks(projectId: string) {
