@@ -248,8 +248,37 @@ api.put('/settings', requireAuth, async (c) => {
 
 // --- Filesystem browsing (for project creation) ---
 api.get('/fs/list', requireAuth, (c) => {
-  const raw = c.req.query('path');
-  const target = raw && raw.trim() ? resolve(raw.trim()) : homedir();
+  const raw = c.req.query('path')?.trim();
+
+  // The project picker starts at the filesystem root, not the user's home directory.
+  // On Windows, the root is represented as "This PC" so all available drive letters
+  // (C:, D:, E:, etc.) are visible before entering a drive. On Unix-like systems,
+  // "/" is the filesystem root.
+  if (!raw || raw === '__roots__') {
+    if (process.platform === 'win32') {
+      const entries = Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))
+        .map((letter) => `${letter}:\\\\`)
+        .filter((drive) => existsSync(drive))
+        .map((drive) => ({
+          name: drive.slice(0, 2),
+          path: drive,
+        }));
+      return c.json({ path: '__roots__', parent: null, entries });
+    }
+
+    const target = '/';
+    try {
+      const entries = readdirSync(target, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => ({ name: e.name, path: join(target, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return c.json({ path: target, parent: null, entries });
+    } catch {
+      return c.json({ error: 'Failed to read filesystem root' }, 500);
+    }
+  }
+
+  const target = resolve(raw);
   try {
     if (!existsSync(target)) return c.json({ error: 'Path does not exist' }, 404);
     const stat = statSync(target);
@@ -258,7 +287,12 @@ api.get('/fs/list', requireAuth, (c) => {
       .filter((e) => e.isDirectory())
       .map((e) => ({ name: e.name, path: join(target, e.name) }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return c.json({ path: target, parent: dirname(target) === target ? null : dirname(target), entries });
+    const isWindowsDriveRoot = process.platform === 'win32' && /^[A-Z]:\\\\$/i.test(target);
+    return c.json({
+      path: target,
+      parent: isWindowsDriveRoot ? '__roots__' : (dirname(target) === target ? null : dirname(target)),
+      entries,
+    });
   } catch {
     return c.json({ error: 'Failed to read directory' }, 500);
   }
