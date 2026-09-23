@@ -7,7 +7,7 @@ import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
+  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
