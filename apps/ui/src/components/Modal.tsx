@@ -118,6 +118,7 @@ export function Modal() {
               name={workflowName}
               description={workflowDesc}
               createWorkflow={createWorkflow}
+              closeModal={closeModal}
             />
           )}
           {modal.kind === 'addTask' && <AddTaskFooter />}
@@ -180,14 +181,16 @@ function NewWorkflowFooter({
   name,
   description,
   createWorkflow,
+  closeModal,
 }: {
   name: string;
   description: string;
   createWorkflow: (name: string, description?: string) => Promise<boolean>;
+  closeModal: () => void;
 }) {
   return (
     <>
-      <button type="button" onClick={() => undefined} className="px-4 py-2 rounded text-app-text hover:text-white transition-colors">
+      <button type="button" onClick={closeModal} className="px-4 py-2 rounded text-app-text hover:text-white transition-colors">
         Cancel
       </button>
       <button
