@@ -2,10 +2,10 @@ export type PageId = 'workflow' | 'agents' | 'models' | 'workspaces' | 'settings
 export type RightTab = 'todo' | 'logs' | 'context';
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 export type TaskStatus = 'PENDING' | 'READY' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'BLOCKED' | 'COMPLETED' | 'FAILED';
-export type AgentRequestType = 'question' | 'permission' | 'choice';
+export type AdapterRequestType = 'question' | 'permission' | 'choice';
 
-export interface AgentRequest {
-  type: AgentRequestType;
+export interface AdapterRequest {
+  type: AdapterRequestType;
   message?: string;
   command?: string;
   options?: string[];
@@ -21,11 +21,11 @@ export interface Task {
   mode: string;
   workspace: string;
   dependencies: string[];
-  agentRequest?: AgentRequest;
+  agentRequest?: AdapterRequest;
   agentDiff?: string[];
 }
 
-export interface AgentMeta {
+export interface AdapterMeta {
   name: string;
   icon: string;
   color: string;
@@ -46,7 +46,7 @@ export interface RouteConfig {
   model: string;
 }
 
-export type AgentConfigs = Record<string, { modes: Record<string, RouteConfig> }>;
+export type AdapterConfigs = Record<string, { modes: Record<string, RouteConfig> }>;
 
 export interface LogEntry {
   time: string;
