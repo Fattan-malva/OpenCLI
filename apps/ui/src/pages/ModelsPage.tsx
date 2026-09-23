@@ -5,32 +5,12 @@ import { AdapterIcon } from '../components/AdapterIcon';
 import { api } from '../lib/api';
 import type { AdapterCapabilities } from '../lib/types';
 
-/** Build CLI slash-commands equivalent to typing /mode and /models in the TUI. */
-function buildRuntimeCommands(
-  adapterId: string,
-  patch: { provider?: string; model?: string; mode?: string },
-): string[] {
-  const cmds: string[] = [];
-  if (patch.mode && adapterId !== 'claude') {
-    cmds.push(`/mode ${patch.mode}`);
-  }
-  if (patch.provider && patch.model) {
-    if (adapterId === 'claude') {
-      cmds.push(JSON.stringify({ type: 'config', model: `${patch.provider}/${patch.model}`, mode: patch.mode }));
-    } else {
-      cmds.push(`/models ${patch.provider}/${patch.model}`);
-    }
-  } else if (patch.mode) {
-    if (adapterId === 'claude') {
-      cmds.push(JSON.stringify({ type: 'mode', mode: patch.mode }));
-    }
-  }
-  return cmds;
-}
+type RuntimeRouting = Record<string, Record<string, { provider: string; model: string }>>;
 
 export function ModelsPage({ active }: { active: boolean }) {
   const { adapters, sessions, activeProject, showToast, loadSessions } = useStore();
   const [caps, setCaps] = useState<Record<string, AdapterCapabilities | null>>({});
+  const [routing, setRouting] = useState<RuntimeRouting>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Record<string, string | null>>({});
 
@@ -38,6 +18,13 @@ export function ModelsPage({ active }: { active: boolean }) {
     sessions.filter((s) => s.status === 'running' || s.status === 'starting').map((s) => s.adapterId),
   );
   const activeAdapters = adapters.filter((a) => a.installed && runningAdapterIds.has(a.id));
+
+  useEffect(() => {
+    if (!active || !activeProject) return;
+    api.getModelRouting(activeProject.id)
+      .then(setRouting)
+      .catch((e: any) => showToast('Routing Load Failed', e?.message ?? 'Unable to load runtime model routing.', 'error'));
+  }, [active, activeProject?.id, showToast]);
 
   useEffect(() => {
     if (!active) return;
@@ -67,39 +54,56 @@ export function ModelsPage({ active }: { active: boolean }) {
     }
   };
 
-  const applyChange = async (
+  const activateMode = async (adapterId: string, modeId: string) => {
+    if (!activeProject) return;
+    setLoading((l) => ({ ...l, [adapterId]: true }));
+    try {
+      await api.setSessionMode(activeProject.id, adapterId, modeId);
+      await loadSessions(activeProject.id);
+      showToast('Mode Switched', `${adapterId} is now using ${modeId}.`, 'success');
+    } catch (e: any) {
+      showToast('Mode Switch Failed', e?.message ?? 'Unable to switch the running session mode.', 'error');
+    } finally {
+      setLoading((l) => ({ ...l, [adapterId]: false }));
+    }
+  };
+
+  const applyModelRouting = async (
     adapterId: string,
-    patch: { provider?: string; model?: string; mode?: string },
+    modeId: string,
+    provider: string,
+    model: string,
   ) => {
     if (!activeProject) {
       showToast('No Project', 'Open a project first.', 'warning');
       return;
     }
+
     setLoading((l) => ({ ...l, [adapterId]: true }));
     try {
-      // 1. Persist to adapter config (agent.{mode}.model) — same as /models in CLI
-      const updated = await api.saveCapabilities(adapterId, patch);
-      setCaps((c) => ({ ...c, [adapterId]: updated }));
-
-      // 2. Notify running session with equivalent slash commands
-      const cmds = buildRuntimeCommands(adapterId, patch);
-      for (const cmd of cmds) {
-        try {
-          await api.sendRuntimeCommand(activeProject.id, adapterId, cmd);
-        } catch {
-          // serve-mode may not accept stdin; config write is the source of truth
-        }
-      }
-
-      const label =
-        patch.provider && patch.model
-          ? `${patch.mode ? patch.mode + ': ' : ''}${patch.provider}/${patch.model}`
-          : patch.mode ?? 'updated';
-      showToast('Model Applied', label, 'success');
+      const result = await api.setModelRouting(activeProject.id, adapterId, modeId, provider, model);
+      setRouting((current) => ({
+        ...current,
+        [adapterId]: {
+          ...(current[adapterId] ?? {}),
+          [modeId]: { provider, model },
+        },
+      }));
       await loadSessions(activeProject.id);
+
+      if (result.applied) {
+        showToast('Model Applied', `${modeId}: ${provider}/${model} is active in the running session.`, 'success');
+      } else if (result.applyError) {
+        showToast(
+          'Routing Saved',
+          `${modeId}: ${provider}/${model} saved. Live session was not changed: ${result.applyError}`,
+          'warning',
+        );
+      } else {
+        showToast('Routing Saved', `${modeId}: ${provider}/${model} will be used for that mode.`, 'success');
+      }
     } catch (e: any) {
-      console.error('[UI] Config change error:', e);
-      showToast('Failed', e?.message ?? 'Unable to apply model config.', 'error');
+      showToast('Model Change Failed', e?.message ?? 'Unable to update runtime model routing.', 'error');
     } finally {
       setLoading((l) => ({ ...l, [adapterId]: false }));
     }
@@ -133,7 +137,10 @@ export function ModelsPage({ active }: { active: boolean }) {
               const cap = caps[adapter.id];
               const isLoading = loading[adapter.id];
               const err = error[adapter.id];
-              const activeMode = cap?.current.mode ?? '';
+              const session = sessions.find((s) => s.adapterId === adapter.id && (s.status === 'running' || s.status === 'starting'));
+              const activeMode = session?.activeMode ?? cap?.current.mode ?? '';
+              const activeProvider = session?.activeProvider ?? cap?.current.provider ?? '';
+              const activeModel = session?.activeModel ?? cap?.current.model ?? '';
 
               return (
                 <div key={adapter.id} className="bg-app-surface border border-app-border rounded-lg overflow-hidden shadow-sm mb-6">
@@ -145,9 +152,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                       <h3 className="font-medium text-app-textStrong truncate">{adapter.name}</h3>
                       <div className="text-xs text-app-text font-mono truncate">
                         Active: {activeMode || '—'}
-                        {cap?.current.provider && cap?.current.model
-                          ? ` • ${cap.current.provider}/${cap.current.model}`
-                          : ''}
+                        {activeProvider && activeModel ? ` • ${activeProvider}/${activeModel}` : ''}
                       </div>
                     </div>
                     {isLoading && <Icon name="loader-2" className="w-4 h-4 animate-spin text-app-text" />}
@@ -164,7 +169,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                         <div className="px-3 py-2 text-xs text-app-text">No agents detected</div>
                       ) : (
                         (cap?.modes ?? []).map((m) => {
-                          const modeCfg = cap?.modeModels?.[m.id] ?? cap?.current ?? { provider: '', model: '' };
+                          const modeCfg = routing[adapter.id]?.[m.id] ?? cap?.modeModels?.[m.id] ?? cap?.current ?? { provider: '', model: '' };
                           const isActive = activeMode === m.id;
                           const modelsForProvider = cap?.models?.[modeCfg.provider] ?? [];
 
@@ -176,7 +181,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                               <button
                                 type="button"
                                 disabled={isLoading}
-                                onClick={() => applyChange(adapter.id, { mode: m.id })}
+                                onClick={() => activateMode(adapter.id, m.id)}
                                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors disabled:opacity-50 hover:bg-app-hover/50"
                               >
                                 <span
@@ -206,7 +211,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                                     onChange={(e) => {
                                       const provider = e.target.value;
                                       const model = cap?.models?.[provider]?.[0] ?? modeCfg.model;
-                                      applyChange(adapter.id, { mode: m.id, provider, model });
+                                      if (provider && model) applyModelRouting(adapter.id, m.id, provider, model);
                                     }}
                                     className="w-full bg-app-surface border border-app-border rounded px-2.5 py-1.5 text-xs text-app-textStrong focus:outline-none focus:border-app-primary disabled:opacity-50"
                                   >
@@ -226,11 +231,9 @@ export function ModelsPage({ active }: { active: boolean }) {
                                     value={modeCfg.model}
                                     disabled={isLoading || !modeCfg.provider}
                                     onChange={(e) =>
-                                      applyChange(adapter.id, {
-                                        mode: m.id,
-                                        provider: modeCfg.provider,
-                                        model: e.target.value,
-                                      })
+                                      modeCfg.provider && e.target.value
+                                        ? applyModelRouting(adapter.id, m.id, modeCfg.provider, e.target.value)
+                                        : undefined
                                     }
                                     className="w-full bg-app-surface border border-app-border rounded px-2.5 py-1.5 text-xs text-app-textStrong focus:outline-none focus:border-app-primary disabled:opacity-50"
                                   >
@@ -248,11 +251,9 @@ export function ModelsPage({ active }: { active: boolean }) {
                         })
                       )}
                     </div>
-                    {cap?.configPath && (
-                      <div className="text-[11px] text-app-text/70 font-mono truncate mt-3">
-                        Config: {cap.configPath}
-                      </div>
-                    )}
+                    <div className="text-[11px] text-app-text/70 mt-3">
+                      Provider/model selection is an OpenCLI runtime override; adapter config remains unchanged.
+                    </div>
                   </div>
                 </div>
               );
