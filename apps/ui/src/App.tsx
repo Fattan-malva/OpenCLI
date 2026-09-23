@@ -21,7 +21,7 @@ function Shell() {
         <Sidebar />
         <main className="flex-1 flex flex-col bg-app-bg min-w-0 relative">
           <WorkflowPage active={page === 'workflow'} />
-          <AdaptersPage active={page === 'agents'} />
+          <AdaptersPage active={page === 'adapters'} />
           <ModelsPage active={page === 'models'} />
           <WorkspacesPage active={page === 'workspaces'} />
           <SettingsPage active={page === 'settings'} />
