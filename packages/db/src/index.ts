@@ -12,6 +12,7 @@ import type {
   Lock,
   OpenCLIEvent,
   Session,
+  SessionStatus,
 } from '@opencli/domain';
 
 export interface DBConfig {
@@ -478,6 +479,26 @@ export class OpenCLIRepository {
     const rows = this.db
       .prepare("SELECT * FROM sessions WHERE status IN ('running', 'paused')")
       .all() as any[];
+    return rows.map((r) => this.mapSession(r));
+  }
+
+  listSessions(filter: { taskId?: string; agentId?: string; status?: SessionStatus } = {}): Session[] {
+    let query = 'SELECT * FROM sessions WHERE 1=1';
+    const params: any[] = [];
+    if (filter.taskId) {
+      query += ' AND task_id = ?';
+      params.push(filter.taskId);
+    }
+    if (filter.agentId) {
+      query += ' AND agent_id = ?';
+      params.push(filter.agentId);
+    }
+    if (filter.status) {
+      query += ' AND status = ?';
+      params.push(filter.status);
+    }
+    query += ' ORDER BY started_at DESC';
+    const rows = this.db.prepare(query).all(...params) as any[];
     return rows.map((r) => this.mapSession(r));
   }
 
