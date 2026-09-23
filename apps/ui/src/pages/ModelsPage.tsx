@@ -138,6 +138,7 @@ export function ModelsPage({ active }: { active: boolean }) {
               const activeMode = session?.activeMode ?? cap?.current.mode ?? '';
               const activeProvider = session?.activeProvider ?? cap?.current.provider ?? '';
               const activeModel = session?.activeModel ?? cap?.current.model ?? '';
+              const sessionRunning = session?.status === 'running' || session?.status === 'starting';
 
               return (
                 <div key={adapter.id} className="bg-app-surface border border-app-border rounded-lg overflow-hidden shadow-sm mb-6">
