@@ -117,7 +117,7 @@ export function ModelsPage({ active }: { active: boolean }) {
       <div className="h-12 border-b border-app-border flex items-center justify-between px-6 shrink-0 bg-app-bg/50 backdrop-blur">
         <h1 className="font-semibold text-app-textStrong">Agent Model Configuration</h1>
         <span className="text-xs text-app-text border border-app-border px-2 py-0.5 rounded-full bg-app-surface">
-          Installed Agents
+          Installed Adapters
         </span>
       </div>
       <div className="flex-1 overflow-y-auto p-6">
@@ -133,7 +133,7 @@ export function ModelsPage({ active }: { active: boolean }) {
           {activeAdapters.length === 0 ? (
             <div className="border border-dashed border-app-border rounded-xl p-16 flex flex-col items-center text-center">
               <Icon name="cpu" className="w-8 h-8 text-app-text/40 mb-3" />
-              <p className="text-sm text-app-text">No running CLI agents. Start adapters in the Agents page to configure their models.</p>
+              <p className="text-sm text-app-text">No running CLI agents. Start adapters in the Adapters page to configure their models.</p>
             </div>
           ) : (
             activeAdapters.map((adapter) => {
@@ -170,7 +170,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                     </label>
                     <div className="border border-app-border rounded overflow-hidden bg-app-bg divide-y divide-app-border">
                       {(cap?.modes ?? []).length === 0 ? (
-                        <div className="px-3 py-2 text-xs text-app-text">No agents detected</div>
+                        <div className="px-3 py-2 text-xs text-app-text">No modes detected</div>
                       ) : (
                         (cap?.modes ?? []).map((m) => {
                           const modeCfg = routing[adapter.id]?.[m.id] ?? cap?.modeModels?.[m.id] ?? cap?.current ?? { provider: '', model: '' };
