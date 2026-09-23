@@ -259,24 +259,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [activeProject?.id]);
 
   const createWorkflow = useCallback(async (name: string, description?: string): Promise<boolean> => {
-    if (!activeProject) {
-      showToast('No Project', 'Open a project before creating a workflow.', 'warning');
-      return false;
-    }
+    if (!activeProject) return false;
 
     try {
       const workflow = await api.createWorkflow(activeProject.id, name, description);
       setWorkflows((prev) => [workflow, ...prev]);
       setActiveWorkflow(workflow);
       setTasks([]);
-      closeModal();
-      showToast('Workflow Created', `${workflow.name} is ready for tasks.`, 'success');
+      setModal(null);
       return true;
-    } catch (error: any) {
-      showToast('Workflow Failed', error?.message ?? 'Unable to create workflow.', 'error');
+    } catch {
       return false;
     }
-  }, [activeProject?.id, showToast]);
+  }, [activeProject?.id]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
