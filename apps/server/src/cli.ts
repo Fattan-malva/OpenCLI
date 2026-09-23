@@ -259,7 +259,13 @@ function readCurrentFromConfig(
 ): { provider: string; model: string; mode: string; configPath?: string; modeModels: Record<string, ModeModelConfig> } {
   const { path, cfg } = readConfigFile(adapterId);
   const modeModels = readModeModelsFromConfig(adapterId, modes, cfg);
-  const activeMode = String(cfg.mode ?? cfg.defaultMode ?? modes[0]?.id ?? 'default');
+  // OpenCode uses default_agent for the selected primary agent.
+  // A legacy top-level string "mode" is invalid in current OpenCode config schema.
+  const activeMode = String(
+    adapterId === 'opencode'
+      ? (cfg.default_agent ?? modes[0]?.id ?? 'default')
+      : (cfg.defaultMode ?? modes[0]?.id ?? 'default'),
+  );
   const active = modeModels[activeMode] ?? Object.values(modeModels)[0] ?? { provider: 'default', model: 'auto' };
   return {
     provider: active.provider,
