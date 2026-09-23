@@ -421,10 +421,26 @@ export async function stopSession(projectId: string, adapterId: string): Promise
   return true;
 }
 
-export function stopAll(projectId: string): void {
-  for (const [k, entry] of SESSIONS.entries()) {
-    if (entry.projectId !== projectId) continue;
-    SESSIONS.delete(k);
+export async function stopAll(projectId: string): Promise<void> {
+  const entries = Array.from(SESSIONS.entries()).filter(([, entry]) => entry.projectId === projectId);
+  for (const [key, entry] of entries) {
+    if (entry.child?.pid) {
+      try {
+        if (process.platform === 'win32') {
+          await new Promise<void>((resolve) => {
+            execFile('taskkill', ['/pid', String(entry.child!.pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+          });
+        } else {
+          entry.child.kill('SIGTERM');
+        }
+      } catch {
+        // Ignore processes that already exited.
+      }
+    }
+    entry.status = 'exited';
+    entry.endedAt = new Date().toISOString();
+    entry.child = undefined;
+    SESSIONS.delete(key);
   }
 }
 
