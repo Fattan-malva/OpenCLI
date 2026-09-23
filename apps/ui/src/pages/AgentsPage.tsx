@@ -52,6 +52,9 @@ export function AgentsPage({ active }: { active: boolean }) {
       // Reload sessions to get updated status
       await loadSessionsFor(activeProject.id);
     } catch (e: any) {
+      if (!currentActive) {
+        await setAdapterActive(id, false).catch(() => undefined);
+      }
       console.error('[UI] Toggle error:', e);
       showToast('Failed', e?.message ?? 'Unable to change adapter state.', 'error');
     } finally {
