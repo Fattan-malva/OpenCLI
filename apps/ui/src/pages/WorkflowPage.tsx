@@ -93,6 +93,13 @@ export function WorkflowPage({ active }: { active: boolean }) {
             </button>
           )}
           <button
+            onClick={() => openModal({ title: 'New Workflow', kind: 'newWorkflow' })}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded bg-app-surface border border-app-border hover:bg-app-hover text-app-text transition-colors text-xs font-medium"
+          >
+            <Icon name="workflow" className="w-3.5 h-3.5" />
+            <span>New Workflow</span>
+          </button>
+          <button
             onClick={() => openModal({ title: 'Add New Task', kind: 'addTask' })}
             className="flex items-center space-x-1 px-3 py-1.5 rounded bg-app-primary hover:bg-indigo-600 text-white transition-colors text-xs font-medium shadow-sm shadow-indigo-500/20"
           >
