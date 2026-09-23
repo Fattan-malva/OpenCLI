@@ -129,6 +129,7 @@ export interface OpenCLIEvent {
   type: EventType;
   projectId?: string;
   taskId?: string;
+  workflowId?: string;
   agentId?: string;
   timestamp: string;
   payload: Record<string, unknown>;
@@ -163,6 +164,7 @@ export type EventType =
   | 'git.commit_created'
   | 'git.merge_conflict'
   | 'git.integrated'
+  | 'workflow.created'
   | 'workflow.started'
   | 'workflow.paused'
   | 'workflow.resumed'
