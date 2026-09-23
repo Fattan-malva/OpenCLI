@@ -1,5 +1,5 @@
 export type PageId = 'workflow' | 'agents' | 'models' | 'workspaces' | 'settings';
-export type RightTab = 'logs' | 'context';
+export type RightTab = 'todo' | 'logs' | 'context';
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'COMPLETED' | 'FAILED';
 export type AgentRequestType = 'question' | 'permission' | 'choice';
