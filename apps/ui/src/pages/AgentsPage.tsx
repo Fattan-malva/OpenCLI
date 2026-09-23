@@ -5,7 +5,7 @@ import { AdapterIcon } from '../components/AdapterIcon';
 import { api } from '../lib/api';
 
 export function AgentsPage({ active }: { active: boolean }) {
-  const { adapters, loadAdapters, sessions, activeProject, showToast, setSessions } = useStore();
+  const { adapters, loadAdapters, sessions, activeProject, showToast, setSessions, setAdapterActive } = useStore();
   const [installAdapterId, setInstallAdapterId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -30,19 +30,23 @@ export function AgentsPage({ active }: { active: boolean }) {
     setBusyId(id);
     try {
       if (!currentActive) {
-        // Start CLI agent in background
+        // Activation is explicit and persisted so other pages (Models/Providers)
+        // can show only adapters selected by the user.
+        await setAdapterActive(id, true);
+
         console.log(`[UI] Starting ${adapter.name}...`);
         const session = await api.startSession(activeProject.id, id, adapter.name);
         console.log('[UI] Session started:', session);
         if (session.status === 'running' || session.status === 'starting') {
           showToast('CLI Agent Started', `${session.command ?? adapter.name} running (PID: ${session.pid || 'starting'}).`, 'success');
         } else {
+          await setAdapterActive(id, false);
           showToast('Start Failed', session.error ?? `${adapter.name} failed to start.`, 'error');
         }
       } else {
-        // Stop CLI agent
         console.log(`[UI] Stopping ${adapter.name}...`);
         await api.stopSession(activeProject.id, id);
+        await setAdapterActive(id, false);
         showToast('CLI Agent Stopped', `${adapter.name} has been stopped.`, 'info');
       }
       // Reload sessions to get updated status
