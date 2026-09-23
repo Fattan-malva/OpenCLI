@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AGENTS, useStore } from '../store';
+import { ADAPTERS, useStore } from '../store';
 import { logTypeColor } from '../store';
 import { Icon } from '../lib/icons';
 import type { LogEntry } from '../lib/types';
@@ -33,7 +33,7 @@ function LogLine({ entry }: { entry: LogEntry }) {
   const { time, type, message, agentId, taskId } = entry;
   const typeColor = logTypeColor(type);
   const shortType = type.split('.').pop() ?? type;
-  const agent = agentId ? AGENTS[agentId] : undefined;
+  const agent = agentId ? ADAPTERS[agentId] : undefined;
 
   return (
     <div className="mb-1 hover:bg-white/[0.02] -mx-4 px-4 py-0.5 rounded transition-colors">
