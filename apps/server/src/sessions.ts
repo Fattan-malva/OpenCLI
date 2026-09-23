@@ -243,74 +243,61 @@ export async function startSession(opts: {
     serverUrl: port ? `http://127.0.0.1:${port}` : undefined,
   };
 
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (s: SessionEntry) => {
-      if (!settled) {
-        settled = true;
-        const { child, ...rest } = s;
-        resolve({ ...rest, status: alive(s) ? 'running' : s.status });
-      }
-    };
-
-    console.log(`[${adapterId}] Running in ${projectPath}: ${commandLine}`);
-
-    const child = spawn(cmd, args, {
-      cwd: projectPath,
-      detached: false,
-      windowsHide: true,
-      shell: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ...(process.platform !== 'win32' ? { TERM: 'dumb' } : {}),
-      },
-    });
-
-    state.child = child;
-    state.pid = child.pid ?? null;
-    if (state.pid) state.status = 'running';
-    SESSIONS.set(key(projectId, adapterId), state);
-
-    try {
-      await createRemoteSession(state);
-    } catch (error: any) {
-      // Keep the adapter session alive even if its optional HTTP control plane is unavailable.
-      state.error = error?.message ?? 'Failed to initialize runtime session';
-      console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
-    }
-
-    finish(state);
-
-    child.stdout?.on('data', (data) => {
-      console.log(`[${adapterId}] stdout:`, data.toString());
-    });
-
-    child.stderr?.on('data', (data) => {
-      console.log(`[${adapterId}] stderr:`, data.toString());
-    });
-
-    child.on('exit', (code) => {
-      console.log(`[${adapterId}] Process exited with code:`, code);
-      const current = SESSIONS.get(key(projectId, adapterId));
-      if (current) {
-        current.status = code === 0 ? 'exited' : 'failed';
-        current.endedAt = new Date().toISOString();
-        current.child = undefined;
-      }
-    });
-
-    child.on('error', (err) => {
-      console.error(`[${adapterId}] Process error:`, err);
-      const current = SESSIONS.get(key(projectId, adapterId));
-      if (current) {
-        current.status = 'failed';
-        current.endedAt = new Date().toISOString();
-        current.error = err.message;
-        current.child = undefined;
-      }
-    });
+  const child = spawn(cmd, args, {
+    cwd: projectPath,
+    detached: false,
+    windowsHide: true,
+    shell: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      ...(process.platform !== 'win32' ? { TERM: 'dumb' } : {}),
+    },
   });
+
+  state.child = child;
+  state.pid = child.pid ?? null;
+  if (state.pid) state.status = 'running';
+  SESSIONS.set(key(projectId, adapterId), state);
+
+  try {
+    await createRemoteSession(state);
+  } catch (error: any) {
+    // Keep the adapter process alive even if its optional HTTP control plane is unavailable.
+    state.error = error?.message ?? 'Failed to initialize runtime session';
+    console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
+  }
+
+  child.stdout?.on('data', (data) => {
+    console.log(`[${adapterId}] stdout:`, data.toString());
+  });
+
+  child.stderr?.on('data', (data) => {
+    console.log(`[${adapterId}] stderr:`, data.toString());
+  });
+
+  child.on('exit', (code) => {
+    console.log(`[${adapterId}] Process exited with code:`, code);
+    const current = SESSIONS.get(key(projectId, adapterId));
+    if (current) {
+      current.status = code === 0 ? 'exited' : 'failed';
+      current.endedAt = new Date().toISOString();
+      current.child = undefined;
+    }
+  });
+
+  child.on('error', (err) => {
+    console.error(`[${adapterId}] Process error:`, err);
+    const current = SESSIONS.get(key(projectId, adapterId));
+    if (current) {
+      current.status = 'failed';
+      current.endedAt = new Date().toISOString();
+      current.error = err.message;
+      current.child = undefined;
+    }
+  });
+
+  return { ...state, status: alive(state) ? 'running' : state.status };
 }
 
 export async function stopSession(projectId: string, adapterId: string): Promise<boolean> {
