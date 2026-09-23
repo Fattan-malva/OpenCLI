@@ -99,12 +99,25 @@ export class ProcessManager {
       });
     });
 
-    // Stream stderr
+    // Stream stderr as live workflow output too. Many agent CLIs write their
+    // progress, prompts, confirmations and even final text to stderr.
     child.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       managed.errorBuffer.push(text);
       if (managed.errorBuffer.length > 1000) {
         managed.errorBuffer = managed.errorBuffer.slice(-500);
+      }
+
+      for (const line of text.split(/\\r?\\n/).map((item) => item.replace(/\\x1B\\[[0-?]*[ -\\/]*[@-~]/g, '').trim()).filter(Boolean)) {
+        const isConfirmation = /(?:\\?|\\bconfirm\\b|\\bproceed\\b|\\bcontinue\\b|\\bapprove\\b).*(?:\\[y\\/n\\]|\\(y\\/n\\)|\\by\\/n\\b|\\byes\\/no\\b)|(?:\\b(?:allow|approve|permission)\\b.*(?:\\?|:))|(?:\\b(?:proceed|continue)\\?)/i.test(line);
+        const isQuestion = /\\?$/.test(line) || /(?:enter|provide|choose|select|which|what|where|how|why).*(?:input|answer|option|value)/i.test(line);
+        void this.eventBus.emit({
+          type: isConfirmation ? 'agent.confirmation_requested' : isQuestion ? 'agent.question' : 'agent.output',
+          agentId,
+          taskId,
+          workflowId,
+          payload: { processId: id, text: line, stream: 'stderr', interactive: isConfirmation || isQuestion },
+        });
       }
     });
 
