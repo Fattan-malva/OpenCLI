@@ -5,6 +5,7 @@ import type {
   FsListResult,
   ProjectRecord,
   SystemSettings,
+  WorkflowRecord,
 } from './types';
 
 const TOKEN_KEY = 'opencli.token';
@@ -152,6 +153,87 @@ export const api = {
   startAllSessions(projectId: string) {
     return request<AdapterSession[]>(`/projects/${encodeURIComponent(projectId)}/sessions/start-all`, {
       method: 'POST',
+    });
+  },
+  listWorkflows(projectId: string) {
+    return request<WorkflowRecord[]>(`/projects/${encodeURIComponent(projectId)}/workflows`);
+  },
+  createWorkflow(projectId: string, name: string, description?: string) {
+    return request<WorkflowRecord>(`/projects/${encodeURIComponent(projectId)}/workflows`, {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    });
+  },
+  getWorkflowTasks(workflowId: string) {
+    return request<Array<{
+      id: string;
+      workflowId?: string;
+      projectId: string;
+      title: string;
+      description?: string;
+      status: string;
+      priority: number;
+      dependencies: string[];
+      agentId?: string;
+      modeId?: string;
+      modelId?: string;
+      workspaceId?: string;
+      fileScopes: string[];
+      retryCount: number;
+      maxRetries: number;
+      createdAt: string;
+      updatedAt: string;
+    }>>(`/workflows/${encodeURIComponent(workflowId)}/tasks`);
+  },
+  startWorkflow(workflowId: string) {
+    return request<{ workflow: WorkflowRecord; stats: Record<string, unknown> }>(`/workflows/${encodeURIComponent(workflowId)}/start`, {
+      method: 'POST',
+    });
+  },
+  pauseWorkflow(workflowId: string) {
+    return request<WorkflowRecord>(`/workflows/${encodeURIComponent(workflowId)}/pause`, { method: 'POST' });
+  },
+  resumeWorkflow(workflowId: string) {
+    return request<WorkflowRecord>(`/workflows/${encodeURIComponent(workflowId)}/resume`, { method: 'POST' });
+  },
+  cancelWorkflow(workflowId: string) {
+    return request<WorkflowRecord>(`/workflows/${encodeURIComponent(workflowId)}/cancel`, { method: 'POST' });
+  },
+  listTasks(projectId: string) {
+    return request<Array<{
+      id: string;
+      workflowId?: string;
+      projectId: string;
+      title: string;
+      description?: string;
+      status: string;
+      priority: number;
+      dependencies: string[];
+      agentId?: string;
+      modeId?: string;
+      modelId?: string;
+      workspaceId?: string;
+      fileScopes: string[];
+      retryCount: number;
+      maxRetries: number;
+      createdAt: string;
+      updatedAt: string;
+    }>>(`/projects/${encodeURIComponent(projectId)}/tasks`);
+  },
+  createTask(projectId: string, input: {
+    title: string;
+    description?: string;
+    workflowId?: string;
+    dependencies?: string[];
+    agentId?: string;
+    modeId?: string;
+    modelId?: string;
+    fileScopes?: string[];
+    priority?: number;
+  }) {
+    return request(`/projects/${encodeURIComponent(projectId)}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(input),
     });
   },
   sendRuntimeCommand(projectId: string, adapterId: string, command: string) {
