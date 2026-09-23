@@ -16,6 +16,9 @@ export interface ManagedProcess {
   outputBuffer: string[];
   errorBuffer: string[];
   abortController: AbortController;
+  agentId: string;
+  taskId?: string;
+  workflowId?: string;
 }
 
 export interface ProcessManagerOptions {
@@ -46,7 +49,7 @@ export class ProcessManager {
     return this.getActiveCount() < this.maxConcurrent;
   }
 
-  async spawn(command: CommandSpec, agentId: string, taskId?: string): Promise<string> {
+  async spawn(command: CommandSpec, agentId: string, taskId?: string, workflowId?: string): Promise<string> {
     if (!this.canSpawn()) {
       throw new Error(`Max concurrent processes (${this.maxConcurrent}) reached`);
     }
@@ -72,6 +75,9 @@ export class ProcessManager {
       outputBuffer: [],
       errorBuffer: [],
       abortController,
+      agentId,
+      taskId,
+      workflowId,
     };
 
     this.processes.set(id, managed);
@@ -88,6 +94,7 @@ export class ProcessManager {
         type: 'agent.output',
         agentId,
         taskId,
+        workflowId,
         payload: { processId: id, text },
       });
     });
@@ -117,6 +124,7 @@ export class ProcessManager {
         type: code === 0 ? 'agent.completed' : 'agent.failed',
         agentId,
         taskId,
+        workflowId,
         payload: { processId: id, exitCode: code, signal },
       });
     });
@@ -128,6 +136,7 @@ export class ProcessManager {
         type: 'agent.crashed',
         agentId,
         taskId,
+        workflowId,
         payload: { processId: id, error: err.message },
       });
     });
@@ -144,6 +153,7 @@ export class ProcessManager {
       type: 'agent.started',
       agentId,
       taskId,
+      workflowId,
       payload: { processId: id, pid: child.pid, command: command.executable },
     });
 
@@ -185,6 +195,9 @@ export class ProcessManager {
       proc.status = 'paused';
       this.eventBus.emit({
         type: 'agent.paused',
+        agentId: proc.agentId,
+        taskId: proc.taskId,
+        workflowId: proc.workflowId,
         payload: { processId },
       });
     }
@@ -198,6 +211,9 @@ export class ProcessManager {
       proc.status = 'running';
       this.eventBus.emit({
         type: 'agent.resumed',
+        agentId: proc.agentId,
+        taskId: proc.taskId,
+        workflowId: proc.workflowId,
         payload: { processId },
       });
     }
