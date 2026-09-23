@@ -278,12 +278,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
-      const list = await api.listTasks(projectId);
+      const workflowId = activeWorkflow?.projectId === projectId ? activeWorkflow.id : undefined;
+      const list = workflowId
+        ? await api.getWorkflowTasks(workflowId)
+        : await api.listTasks(projectId);
       setTasks(list.map(mapBackendTask));
     } catch {
       setTasks([]);
     }
-  }, []);
+  }, [activeWorkflow?.id, activeWorkflow?.projectId]);
 
   const loadEvents = useCallback(async (projectId: string): Promise<void> => {
     try {
@@ -369,13 +372,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSessionsState(sessions);
   }, []);
 
-  const openProject = useCallback((project: ProjectRecord) => {
+  const openProject = useCallback(async (project: ProjectRecord) => {
     setActiveProject(project);
     setScreen('app');
     setPage('workflow');
     setTasks([]);
     setLogs([]);
-    void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
+    await loadWorkflows(project.id);
+    await Promise.all([loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
   }, [loadSessions, loadTasks, loadWorkflows, loadEvents]);
 
   useEffect(() => {
