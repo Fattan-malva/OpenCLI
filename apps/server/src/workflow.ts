@@ -143,7 +143,7 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
   let processId: string | undefined;
   let sessionId: string | undefined;
   try {
-    processId = await deps.runtime.spawn(command, adapterId, task.id);
+    processId = await deps.runtime.spawn(command, adapterId, task.id, task.workflowId);
     const session = deps.db.createSession({
       agentId: adapterId,
       taskId: task.id,
