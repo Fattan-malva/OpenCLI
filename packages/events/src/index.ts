@@ -72,11 +72,12 @@ export class EventBusSSEBridge {
   constructor(private bus: EventBus) {}
 
   subscribe(
-    filter: { projectId?: string; taskId?: string; agentId?: string },
+    filter: { projectId?: string; workflowId?: string; taskId?: string; agentId?: string },
     onEvent: (data: string) => void,
   ): () => void {
     return this.bus.on('*', (event) => {
       if (filter.projectId && event.projectId !== filter.projectId) return;
+      if (filter.workflowId && event.workflowId !== filter.workflowId) return;
       if (filter.taskId && event.taskId !== filter.taskId) return;
       if (filter.agentId && event.agentId !== filter.agentId) return;
       onEvent(JSON.stringify(event));
