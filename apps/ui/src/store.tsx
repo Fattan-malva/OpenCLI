@@ -129,7 +129,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
   const [page, setPage] = useState<PageId>('workflow');
-  const [rightTab, setRightTab] = useState<RightTab>('logs');
+  const [rightTab, setRightTab] = useState<RightTab>('todo');
   const [tasks, setTasks] = useState<Task[]>(() => JSON.parse(JSON.stringify(initialTasks)));
   const [paused, setPaused] = useState(false);
   const [globalStatus, setGlobalStatus] = useState<GlobalStatus>({
