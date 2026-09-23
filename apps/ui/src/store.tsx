@@ -497,6 +497,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ].slice(-1000));
         }
 
+        if (event.taskId) {
+          const text = typeof event.payload?.text === 'string' ? event.payload.text : '';
+          if (event.type === 'agent.output' && text) {
+            setTasks((prev) => prev.map((task) =>
+              task.id === event.taskId
+                ? { ...task, liveOutput: `${task.liveOutput ?? ''}${task.liveOutput ? '\\n' : ''}${text}`.slice(-8000) }
+                : task,
+            ));
+          } else if (event.type === 'agent.question' && text) {
+            setTasks((prev) => prev.map((task) =>
+              task.id === event.taskId
+                ? {
+                    ...task,
+                    status: 'ASK',
+                    liveRequest: { type: 'question', message: text },
+                    agentRequest: { type: 'question', message: text },
+                  }
+                : task,
+            ));
+          } else if (event.type === 'agent.confirmation_requested' && text) {
+            setTasks((prev) => prev.map((task) =>
+              task.id === event.taskId
+                ? {
+                    ...task,
+                    status: 'ASK',
+                    liveRequest: { type: 'permission', message: text, command: text },
+                    agentRequest: { type: 'permission', message: text, command: text },
+                  }
+                : task,
+            ));
+          }
+        }
+
         if (stateEvents.has(event.type ?? '')) scheduleRefresh();
       } catch {
         // Ignore malformed event payloads.
