@@ -8,22 +8,13 @@ import type { AdapterCapabilities } from '../lib/types';
 type RuntimeRouting = Record<string, Record<string, { provider: string; model: string }>>;
 
 export function ModelsPage({ active }: { active: boolean }) {
-  const { adapters, sessions, activeProject, showToast, loadSessions } = useStore();
+  const { adapters, sessions, activeProject, showToast, loadSessions, setSessions } = useStore();
   const [caps, setCaps] = useState<Record<string, AdapterCapabilities | null>>({});
   const [routing, setRouting] = useState<RuntimeRouting>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Record<string, string | null>>({});
 
-  const activeAdapters = adapters.filter(
-    (a) =>
-      a.installed &&
-      a.active &&
-      sessions.some(
-        (session) =>
-          session.adapterId === a.id &&
-          (session.status === 'running' || session.status === 'starting'),
-      ),
-  );
+  const activeAdapters = adapters.filter((a) => a.installed && a.active);
 
   useEffect(() => {
     if (!active || !activeProject) return;
@@ -97,7 +88,11 @@ export function ModelsPage({ active }: { active: boolean }) {
           [modeId]: { provider, model },
         },
       }));
-      await loadSessions(activeProject.id);
+      setSessions(sessions.map((session) =>
+        session.adapterId === adapterId
+          ? { ...session, activeProvider: provider, activeModel: model }
+          : session,
+      ));
 
       if (result.applied) {
         showToast('Model Applied', `${modeId}: ${provider}/${model} is active in the running session.`, 'success');
