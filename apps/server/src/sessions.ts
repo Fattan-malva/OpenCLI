@@ -2,7 +2,7 @@
 // the same way you would type `opencode`, `kilo`, or `claude` in a terminal.
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { adapterCommand } from '@opencli/discovery';
 
 export interface SessionState {
@@ -203,6 +203,40 @@ async function postSessionRuntime(
   return { ok: false, error: lastError };
 }
 
+function migrateInvalidOpenCodeConfig(adapterId: string): void {
+  if (adapterId !== 'opencode') return;
+
+  const home = process.env.USERPROFILE ?? process.env.HOME;
+  if (!home) return;
+
+  const configPath = home + '\\.config\\opencode\\opencode.json';
+  if (!existsSync(configPath)) return;
+
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const config = JSON.parse(raw) as Record<string, unknown>;
+
+    // Older OpenCLI builds incorrectly wrote {"mode":"plan"}.
+    // OpenCode expects "default_agent" at the top level; "mode" belongs
+    // inside an agent definition. Repair only this legacy field.
+    if (typeof config.mode !== 'string') return;
+
+    const backupPath = configPath + '.opencli-backup';
+    if (!existsSync(backupPath)) copyFileSync(configPath, backupPath);
+
+    const legacyMode = config.mode;
+    delete config.mode;
+    if (typeof config.default_agent !== 'string' && legacyMode.trim()) {
+      config.default_agent = legacyMode;
+    }
+
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    console.warn('[opencode] Repaired legacy invalid config field "mode". Mapped it to "default_agent" and backed up the original at ' + backupPath);
+  } catch (error: any) {
+    console.warn('[opencode] Could not repair legacy config:', error?.message ?? error);
+  }
+}
+
 function claudeArgs(): string[] {
   return ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
 }
@@ -260,6 +294,9 @@ export async function startSession(opts: {
   }
 
   const cmd = adapterCommand(adapterId);
+  if (adapterId === 'opencode') {
+    migrateInvalidOpenCodeConfig(adapterId);
+  }
   if (!cmd) {
     const state: SessionState = {
       projectId,
