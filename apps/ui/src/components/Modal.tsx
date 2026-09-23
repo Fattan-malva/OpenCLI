@@ -312,7 +312,7 @@ function AddTaskBody({
   setDependencies: (value: string[]) => void;
   fileScopes: string;
   setFileScopes: (value: string) => void;
-  availableTasks: Array<{ id: string; title: string }>;
+  availableTasks: Array<Pick<Task, 'id' | 'title'>>;
   adapters: AdapterInfo[];
   modes: AdapterMode[];
 }) {
