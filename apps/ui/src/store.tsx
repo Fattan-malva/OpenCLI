@@ -61,6 +61,7 @@ export interface Store {
   activeWorkflow: WorkflowRecord | null;
   loadWorkflows: (projectId: string) => Promise<void>;
   loadTasks: (projectId: string) => Promise<void>;
+  createWorkflow: (name: string, description?: string) => Promise<boolean>;
   loadEvents: (projectId: string) => Promise<void>;
   selectWorkflow: (workflow: WorkflowRecord) => Promise<void>;
   paused: boolean;
@@ -256,6 +257,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTasks([]);
     }
   }, [activeProject?.id]);
+
+  const createWorkflow = useCallback(async (name: string, description?: string): Promise<boolean> => {
+    if (!activeProject) {
+      showToast('No Project', 'Open a project before creating a workflow.', 'warning');
+      return false;
+    }
+
+    try {
+      const workflow = await api.createWorkflow(activeProject.id, name, description);
+      setWorkflows((prev) => [workflow, ...prev]);
+      setActiveWorkflow(workflow);
+      setTasks([]);
+      closeModal();
+      showToast('Workflow Created', `${workflow.name} is ready for tasks.`, 'success');
+      return true;
+    } catch (error: any) {
+      showToast('Workflow Failed', error?.message ?? 'Unable to create workflow.', 'error');
+      return false;
+    }
+  }, [activeProject?.id, showToast]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
@@ -597,6 +618,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeWorkflow,
     loadWorkflows,
     loadTasks,
+    createWorkflow,
     loadEvents,
     selectWorkflow,
     paused,
