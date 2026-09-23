@@ -243,6 +243,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     },
     [loadProjects, loadTasks, loadWorkflows],
+  );
 
   const deleteProject = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -314,7 +315,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPage('workflow');
     setTasks([]);
     void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadSessions(project.id)]);
-  }, [loadLoadSessions]);
+  }, [loadSessions, loadTasks, loadWorkflows]);
 
   useEffect(() => {
     if (screen === 'app') {
