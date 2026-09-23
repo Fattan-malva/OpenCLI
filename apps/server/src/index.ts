@@ -20,8 +20,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { probeCapabilities, writeCapabilityConfig } from './cli.js';
-import { startSession, stopSession, listSessions, getSession, shutdownAll } from './sessions.js';
+import { probeCapabilities } from './cli.js';
+import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel } from './sessions.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -310,16 +310,74 @@ api.get('/adapters/:id/capabilities', async (c) => {
   }
 });
 
-api.put('/adapters/:id/capabilities', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json<{ provider?: string; model?: string; mode?: string }>();
-  try {
-    const caps = await writeCapabilityConfig(id, body ?? {});
-    if (!caps) return c.json({ error: 'adapter not installed' }, 404);
-    return c.json(caps);
-  } catch (e: any) {
-    return c.json({ error: e?.message ?? 'write failed' }, 500);
+api.put('/adapters/:id/capabilities', (c) => {
+  return c.json(
+    {
+      error:
+        'Adapter capabilities are read-only. Use project model routing to change the runtime model without editing adapter configuration.',
+    },
+    410,
+  );
+});
+
+// --- Project runtime model routing (does not modify adapter config files) ---
+api.get('/projects/:projectId/model-routing', (c) => {
+  const project = db.getProject(c.req.param('projectId'));
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  return c.json(db.listModelRoutings(project.id));
+});
+
+api.put('/projects/:projectId/model-routing/:agentId/:modeId', async (c) => {
+  const projectId = c.req.param('projectId');
+  const agentId = c.req.param('agentId');
+  const modeId = c.req.param('modeId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  const body = await c.req.json<{ provider?: string; model?: string }>();
+  const provider = String(body?.provider ?? '').trim();
+  const model = String(body?.model ?? '').trim();
+  if (!provider || !model) {
+    return c.json({ error: 'provider and model are required' }, 400);
   }
+
+  try {
+    const capabilities = await probeCapabilities(agentId, true);
+    const modeExists = capabilities.modes.some((mode) => mode.id === modeId);
+    if (!modeExists) return c.json({ error: `Unknown mode: ${modeId}` }, 400);
+
+    const providerModels = capabilities.models[provider] ?? [];
+    if (providerModels.length > 0 && !providerModels.includes(model)) {
+      return c.json({ error: `Model ${provider}/${model} is not available for adapter ${agentId}` }, 400);
+    }
+
+    const routing = db.setModelRouting(projectId, agentId, modeId, provider, model);
+    const session = getSession(projectId, agentId);
+    let applied = false;
+    let applyError: string | undefined;
+
+    if (session?.status === 'running' && session.activeMode === modeId) {
+      const result = await setSessionModel(projectId, agentId, provider, model);
+      applied = result.ok;
+      if (!result.ok) applyError = result.error;
+    }
+
+    return c.json({ routing, applied, applyError });
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? 'Unable to save model routing' }, 500);
+  }
+});
+
+api.post('/projects/:projectId/sessions/mode', async (c) => {
+  const projectId = c.req.param('projectId');
+  const body = await c.req.json<{ adapterId?: string; mode?: string }>();
+  const adapterId = String(body?.adapterId ?? '').trim();
+  const mode = String(body?.mode ?? '').trim();
+  if (!adapterId || !mode) return c.json({ error: 'adapterId and mode are required' }, 400);
+
+  const result = await setSessionMode(projectId, adapterId, mode);
+  if (!result.ok) return c.json({ error: result.error ?? 'Failed to switch session mode' }, 409);
+  return c.json({ success: true, adapterId, mode });
 });
 
 // --- Adapter sessions (spawn / stop real CLI in project folder) ---
