@@ -108,9 +108,9 @@ export class ProcessManager {
         managed.errorBuffer = managed.errorBuffer.slice(-500);
       }
 
-      for (const line of text.split(/\\r?\\n/).map((item) => item.replace(/\\x1B\\[[0-?]*[ -\\/]*[@-~]/g, '').trim()).filter(Boolean)) {
-        const isConfirmation = /(?:\\?|\\bconfirm\\b|\\bproceed\\b|\\bcontinue\\b|\\bapprove\\b).*(?:\\[y\\/n\\]|\\(y\\/n\\)|\\by\\/n\\b|\\byes\\/no\\b)|(?:\\b(?:allow|approve|permission)\\b.*(?:\\?|:))|(?:\\b(?:proceed|continue)\\?)/i.test(line);
-        const isQuestion = /\\?$/.test(line) || /(?:enter|provide|choose|select|which|what|where|how|why).*(?:input|answer|option|value)/i.test(line);
+      for (const line of text.split(/\r?\n/).map((item) => item.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, '').trim()).filter(Boolean)) {
+        const isConfirmation = /(?:\?|\bconfirm\b|\bproceed\b|\bcontinue\b|\bapprove\b).*(?:\[y\/n\]|\(y\/n\)|\by\/n\b|\byes\/no\b)|(?:\b(?:allow|approve|permission)\b.*(?:\?|:))|(?:\b(?:proceed|continue)\?)/i.test(line);
+        const isQuestion = /\?$/.test(line) || /(?:enter|provide|choose|select|which|what|where|how|why).*(?:input|answer|option|value)/i.test(line);
         void this.eventBus.emit({
           type: isConfirmation ? 'agent.confirmation_requested' : isQuestion ? 'agent.question' : 'agent.output',
           agentId,
