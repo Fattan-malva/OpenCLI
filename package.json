@@ -2,19 +2,24 @@
   "name": "opencli",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "opencli": "./bin/opencli.ts"
+  },
   "workspaces": [
     "packages/*",
     "adapters/*",
     "apps/*"
   ],
   "scripts": {
+    "start": "npx tsx bin/opencli.ts",
     "build": "npm run build --workspaces --if-present",
+    "build:ui": "npm run build -w @opencli/ui",
     "typecheck": "tsc -b",
     "lint": "eslint packages/ adapters/ apps/ --ext .ts,.tsx",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev:server": "npm -w @opencli/server dev",
-    "dev:ui": "npm -w @opencli/ui dev"
+    "dev:server": "npm run dev -w @opencli/server",
+    "dev:ui": "npm run dev -w @opencli/ui"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",

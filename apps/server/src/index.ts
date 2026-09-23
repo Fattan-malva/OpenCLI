@@ -1,5 +1,6 @@
 ﻿import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { OpenCLIRepository } from '@opencli/db';
 import { EventBus, EventBusSSEBridge } from '@opencli/events';
@@ -18,8 +19,10 @@ import { migrations } from '@opencli/db/src/migrations/index.js';
 import type { Task, Project } from '@opencli/domain';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
+mkdirSync(DATA_DIR, { recursive: true });
 
 // Initialize core services
 const eventBus = new EventBus();
@@ -299,10 +302,21 @@ app.get('/config/routing/:projectId/:category', (c) => {
   return c.json(routing ?? {});
 });
 
+// === Serve UI static files ===
+const UI_DIST = join(__dirname, '..', '..', 'ui', 'dist');
+app.use('/assets/*', serveStatic({ root: UI_DIST }));
+app.get('*', serveStatic({ root: UI_DIST }));
+app.get('*', serveStatic({ path: join(UI_DIST, 'index.html') }));
+
 // === Start server ===
 const port = parseInt(process.env.PORT ?? '3000', 10);
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`OpenCLI server running on http://localhost:${info.port}`);
-  console.log(`Data directory: ${DATA_DIR}`);
+  console.log(`\n  ╔══════════════════════════════════════╗`);
+  console.log(`  ║         OpenCLI is running           ║`);
+  console.log(`  ╠══════════════════════════════════════╣`);
+  console.log(`  ║  Server : http://localhost:${info.port}     ║`);
+  console.log(`  ║  UI     : http://localhost:${info.port}     ║`);
+  console.log(`  ║  Data   : ${DATA_DIR}  ║`);
+  console.log(`  ╚══════════════════════════════════════╝\n`);
 });
