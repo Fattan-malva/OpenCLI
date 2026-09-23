@@ -48,10 +48,11 @@ export class EventBus {
   }
 
   getHistory(
-    filter?: { projectId?: string; taskId?: string; agentId?: string; type?: EventType },
+    filter?: { projectId?: string; workflowId?: string; taskId?: string; agentId?: string; type?: EventType },
   ): OpenCLIEvent[] {
     let events = this.history;
     if (filter?.projectId) events = events.filter((e) => e.projectId === filter.projectId);
+    if (filter?.workflowId) events = events.filter((e) => e.workflowId === filter.workflowId);
     if (filter?.taskId) events = events.filter((e) => e.taskId === filter.taskId);
     if (filter?.agentId) events = events.filter((e) => e.agentId === filter.agentId);
     if (filter?.type) events = events.filter((e) => e.type === filter.type);
