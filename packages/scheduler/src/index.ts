@@ -68,7 +68,11 @@ export class Scheduler {
   }
 
   loadTasks(tasks: Task[]): void {
-    for (const task of tasks) this.tasks.set(task.id, { ...task, dependencies: [...task.dependencies], fileScopes: [...task.fileScopes] });
+    for (const task of tasks) {
+      this.tasks.set(task.id, { ...task, dependencies: [...task.dependencies], fileScopes: [...task.fileScopes] });
+      if (task.status === 'running') this.running.add(task.id);
+      else this.running.delete(task.id);
+    }
   }
 
   addTask(task: Task): void {
