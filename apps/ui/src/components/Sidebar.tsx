@@ -4,7 +4,7 @@ import type { PageId } from '../lib/types';
 
 const NAV: { id: PageId; label: string; icon: string; count?: string }[] = [
   { id: 'workflow', label: 'Workflow', icon: 'layout-dashboard' },
-  { id: 'agents', label: 'Agents', icon: 'bot', count: '4' },
+  { id: 'adapters', label: 'Adapters', icon: 'bot', count: '4' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu' },
   { id: 'workspaces', label: 'Workspaces', icon: 'git-merge' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
