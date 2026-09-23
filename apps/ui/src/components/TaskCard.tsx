@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { ADAPTERS, STATUS, useStore } from '../store';
 import { Icon } from '../lib/icons';
+import { api } from '../lib/api';
 import type { Task } from '../lib/types';
 
 export function TaskCard({ task }: { task: Task }) {
@@ -22,34 +23,56 @@ export function TaskCard({ task }: { task: Task }) {
   const handlePermission = (approved: boolean) => {
     const req = task.agentRequest;
     if (!req) return;
-    if (approved) {
-      addLog('user.action', `Approved command execution for task ${task.id}`);
-      addLog('system.exec', `Running command: ${req.command}`, 'system', task.id);
-      showToast('Permission Granted', 'Agent will execute the command and resume.', 'success');
-    } else {
-      addLog('user.action', `Denied command execution for task ${task.id}`);
-      addLog('agent.input', `User denied permission to run: ${req.command}`, task.agentId, task.id);
-      showToast('Permission Denied', 'Agent notified of denial and will seek alternative.', 'info');
-    }
-    updateTask((t) => ({ ...t, status: 'RUNNING', agentRequest: undefined }));
-    updateGlobalStatus('Orchestrating (2 Agents Active)', 'indigo', 'loader-2', true);
+    void (async () => {
+      try {
+        await api.sendTaskInput(task.id, approved ? 'y' : 'n');
+        if (approved) {
+          addLog('user.action', `Approved command execution for task ${task.id}`);
+          addLog('system.exec', `Running command: ${req.command}`, 'system', task.id);
+          showToast('Permission Granted', 'Adapter will resume execution.', 'success');
+        } else {
+          addLog('user.action', `Denied command execution for task ${task.id}`);
+          addLog('agent.input', `User denied permission to run: ${req.command}`, task.agentId, task.id);
+          showToast('Permission Denied', 'Adapter notified of denial.', 'info');
+        }
+        updateTask((t) => ({ ...t, status: 'RUNNING', agentRequest: undefined, liveRequest: undefined }));
+        updateGlobalStatus('Orchestrating (Active)', 'indigo', 'loader-2', true);
+      } catch (error: any) {
+        showToast('Input Failed', error?.message ?? 'Could not send input to adapter.', 'error');
+      }
+    })();
   };
 
   const handleChoice = (choiceText: string) => {
-    addLog('user.action', `Selected option for task ${task.id}: "${choiceText}"`);
-    addLog('agent.input', `User decision provided: ${choiceText}`, task.agentId, task.id);
-    showToast('Decision Recorded', 'Agent is proceeding with your recommendation.', 'success');
-    updateTask((t) => ({ ...t, status: 'RUNNING', agentRequest: undefined }));
+    void (async () => {
+      try {
+        await api.sendTaskInput(task.id, choiceText);
+        addLog('user.action', `Selected option for task ${task.id}: "${choiceText}"`);
+        addLog('agent.input', `User decision provided: ${choiceText}`, task.agentId, task.id);
+        showToast('Decision Recorded', 'Adapter is proceeding.', 'success');
+        updateTask((t) => ({ ...t, status: 'RUNNING', agentRequest: undefined, liveRequest: undefined }));
+      } catch (error: any) {
+        showToast('Input Failed', error?.message ?? 'Could not send decision to adapter.', 'error');
+      }
+    })();
   };
 
   const replyTask = (e: FormEvent) => {
     e.preventDefault();
     if (!reply) return;
-    addLog('user.input', `Answered ${task.id}: "${reply}"`);
-    showToast('Reply Sent', 'Agent has resumed execution.', 'success');
-    updateTask((t) => ({ ...t, status: 'RUNNING', agentQuestion: undefined }));
-    addLog('task.resumed', `Task ${task.id} resumed after user input.`, 'system', task.id);
-    updateGlobalStatus('Orchestrating (2 Agents Active)', 'indigo', 'loader-2', true);
+    void (async () => {
+      try {
+        await api.sendTaskInput(task.id, reply);
+        addLog('user.input', `Answered ${task.id}: "${reply}"`);
+        showToast('Reply Sent', 'Adapter has resumed execution.', 'success');
+        updateTask((t) => ({ ...t, status: 'RUNNING', agentQuestion: undefined, agentRequest: undefined, liveRequest: undefined }));
+        addLog('task.resumed', `Task ${task.id} resumed after user input.`, 'system', task.id);
+        updateGlobalStatus('Orchestrating (Active)', 'indigo', 'loader-2', true);
+        setReply('');
+      } catch (error: any) {
+        showToast('Input Failed', error?.message ?? 'Could not send answer to adapter.', 'error');
+      }
+    })();
   };
 
   const rejectTask = () => {
@@ -236,6 +259,17 @@ export function TaskCard({ task }: { task: Task }) {
         <p className="text-app-text text-sm">{task.description}</p>
 
         {interactive}
+
+        {task.liveOutput && (
+          <div className="rounded-md border border-app-border bg-[#09090b] overflow-hidden">
+            <div className="px-3 py-1.5 border-b border-app-border text-[9px] uppercase tracking-wider text-app-text font-semibold flex items-center gap-1.5">
+              <Icon name="terminal" className="w-3 h-3" /> Live Adapter Output
+            </div>
+            <pre className="max-h-48 overflow-y-auto px-3 py-2 text-[11px] leading-relaxed font-mono text-app-textStrong whitespace-pre-wrap">
+              {task.liveOutput}
+            </pre>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-4 text-xs mt-1 pt-3 border-t border-app-border/50">
           <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${agentInfo.bg} ${agentInfo.border} ${agentInfo.color}`}>
