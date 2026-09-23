@@ -22,6 +22,7 @@ import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { probeCapabilities } from './cli.js';
 import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes } from './sessions.js';
+import { configureWorkflowRuntime, refreshWorkflow, restoreRunningWorkflows } from './workflow.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -143,6 +144,43 @@ discoverAgents().catch(console.error);
 
 // Release stale locks on startup
 workspaceService.releaseStaleLocks();
+
+const workflowRuntime = {
+  db,
+  eventBus,
+  scheduler,
+  adapterRegistry,
+  runtime,
+  gitService,
+  workspaceService,
+};
+
+configureWorkflowRuntime(workflowRuntime);
+restoreRunningWorkflows(workflowRuntime);
+
+for (const project of db.listProjects()) {
+  scheduler.loadTasks(db.listTasks(project.id));
+}
+
+function ensureDefaultWorkflow(projectId: string) {
+  const existing = db.listWorkflows(projectId);
+  if (existing.length > 0) return existing[0];
+  return db.createWorkflow({
+    projectId,
+    name: 'Manual Workflow',
+    description: 'Tasks created directly from OpenCLI.',
+    status: 'draft',
+  });
+}
+
+function loadWorkflowIntoScheduler(workflowId: string) {
+  scheduler.loadTasks(db.listWorkflowTasks(workflowId));
+}
+
+function updateWorkflowFromTask(taskId: string) {
+  const task = db.getTask(taskId);
+  if (task?.workflowId) refreshWorkflow(workflowRuntime, task.workflowId);
+}
 
 // === API Routes (mounted at both /api and /) ===
 const api = new Hono();
@@ -561,9 +599,11 @@ api.get('/projects/:projectId/tasks', (c) => {
 });
 
 api.post('/projects/:projectId/tasks', async (c) => {
+  const projectId = c.req.param('projectId');
   const body = await c.req.json<{
     title: string;
     description?: string;
+    workflowId?: string;
     dependencies?: string[];
     agentId?: string;
     modeId?: string;
@@ -572,13 +612,29 @@ api.post('/projects/:projectId/tasks', async (c) => {
     priority?: number;
   }>();
 
+  const workflow = body.workflowId
+    ? db.getWorkflow(body.workflowId)
+    : ensureDefaultWorkflow(projectId);
+
+  if (!workflow || workflow.projectId !== projectId) {
+    return c.json({ error: 'Workflow not found for this project' }, 400);
+  }
+
+  const dependencies = body.dependencies ?? [];
+  if (dependencies.length > 0) {
+    const known = new Set(db.listWorkflowTasks(workflow.id).map((task) => task.id));
+    const missing = dependencies.filter((id) => !known.has(id));
+    if (missing.length > 0) return c.json({ error: `Unknown task dependencies: ${missing.join(', ')}` }, 400);
+  }
+
   const task = db.createTask({
-    projectId: c.req.param('projectId'),
+    projectId,
+    workflowId: workflow.id,
     title: body.title,
     description: body.description,
     status: 'pending',
     priority: body.priority ?? 0,
-    dependencies: body.dependencies ?? [],
+    dependencies,
     agentId: body.agentId,
     modeId: body.modeId,
     modelId: body.modelId,
@@ -593,7 +649,7 @@ api.post('/projects/:projectId/tasks', async (c) => {
     type: 'task.created',
     taskId: task.id,
     projectId: task.projectId,
-    payload: { title: task.title },
+    payload: { title: task.title, workflowId: workflow.id },
   });
 
   return c.json(task, 201);
@@ -609,18 +665,21 @@ api.patch('/tasks/:id', async (c) => {
   const updates = await c.req.json();
   const task = db.updateTask(c.req.param('id'), updates);
   if (!task) return c.json({ error: 'Not found' }, 404);
+  scheduler.loadTasks([task]);
+  updateWorkflowFromTask(task.id);
   return c.json(task);
 });
 
 api.post('/tasks/:id/start', async (c) => {
   const task = db.getTask(c.req.param('id'));
   if (!task) return c.json({ error: 'Not found' }, 404);
+  if (!task.workflowId) return c.json({ error: 'Task is not attached to a workflow' }, 400);
 
-  scheduler.markReady(task.id);
-  scheduler.markRunning(task.id);
-  db.updateTask(task.id, { status: 'running' });
-
-  return c.json({ success: true, taskId: task.id });
+  loadWorkflowIntoScheduler(task.workflowId);
+  const result = await scheduler.startWorkflow(task.workflowId);
+  if (!result.started) return c.json({ error: result.errors.join('; ') }, 409);
+  db.updateWorkflow(task.workflowId, { status: 'running' });
+  return c.json({ success: true, taskId: task.id, workflowId: task.workflowId });
 });
 
 api.post('/tasks/:id/cancel', async (c) => {
@@ -635,11 +694,10 @@ api.post('/tasks/:id/cancel', async (c) => {
 
 // --- Task Graph ---
 api.get('/projects/:projectId/graph', (c) => {
-  const tasks = db.listTasks(c.req.param('projectId'));
-  for (const task of tasks) {
-    scheduler.addTask(task);
-  }
-  return c.json(scheduler.getGraph());
+  const workflowId = c.req.query('workflowId');
+  const tasks = workflowId ? db.listWorkflowTasks(workflowId) : db.listTasks(c.req.param('projectId'));
+  scheduler.loadTasks(tasks);
+  return c.json(scheduler.getGraph(workflowId));
 });
 
 // --- Events ---
@@ -699,6 +757,103 @@ api.get('/events/stream', (c) => {
 api.get('/scheduler/stats', (c) => {
   return c.json(scheduler.getStats());
 });
+
+// --- Workflows ---
+api.get('/projects/:projectId/workflows', (c) => {
+  return c.json(db.listWorkflows(c.req.param('projectId')));
+});
+
+api.post('/projects/:projectId/workflows', async (c) => {
+  const projectId = c.req.param('projectId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  const body = await c.req.json<{ name?: string; description?: string }>();
+  const name = String(body?.name ?? '').trim();
+  if (!name) return c.json({ error: 'Workflow name is required' }, 400);
+
+  const workflow = db.createWorkflow({
+    projectId,
+    name,
+    description: body.description,
+    status: 'draft',
+  });
+  return c.json(workflow, 201);
+});
+
+api.get('/workflows/:workflowId', (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  return c.json(workflow);
+});
+
+api.get('/workflows/:workflowId/tasks', (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  return c.json(db.listWorkflowTasks(workflow.id));
+});
+
+api.get('/workflows/:workflowId/graph', (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  loadWorkflowIntoScheduler(workflow.id);
+  return c.json(scheduler.getGraph(workflow.id));
+});
+
+api.post('/workflows/:workflowId/start', async (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  loadWorkflowIntoScheduler(workflow.id);
+  const tasks = db.listWorkflowTasks(workflow.id);
+  if (tasks.length === 0) return c.json({ error: 'Workflow has no tasks' }, 400);
+
+  const result = await scheduler.startWorkflow(workflow.id);
+  if (!result.started) return c.json({ error: result.errors.join('; '), details: result.errors }, 409);
+
+  db.updateWorkflow(workflow.id, { status: 'running' });
+  return c.json({ workflow: db.getWorkflow(workflow.id), stats: scheduler.getStats() });
+});
+
+api.post('/workflows/:workflowId/pause', async (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  scheduler.pauseWorkflow(workflow.id);
+  const updated = db.updateWorkflow(workflow.id, { status: 'paused' });
+  return c.json(updated);
+});
+
+api.post('/workflows/:workflowId/resume', async (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  loadWorkflowIntoScheduler(workflow.id);
+  scheduler.resumeWorkflow(workflow.id);
+  const updated = db.updateWorkflow(workflow.id, { status: 'running' });
+  return c.json(updated);
+});
+
+api.post('/workflows/:workflowId/cancel', async (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  scheduler.cancelWorkflow(workflow.id);
+  const updated = db.updateWorkflow(workflow.id, { status: 'cancelled' });
+  return c.json(updated);
+});
+
+api.get('/workflows/:workflowId/events', (c) => {
+  const workflow = db.getWorkflow(c.req.param('workflowId'));
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  const limit = Math.min(500, Math.max(1, parseInt(c.req.query('limit') ?? '100', 10)));
+  const tasks = db.listWorkflowTasks(workflow.id);
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const events = db.listEvents({ projectId: workflow.projectId }, limit * 3)
+    .filter((event) => !event.taskId || taskIds.has(event.taskId))
+    .slice(0, limit);
+  return c.json(events);
+});
+
+
 
 // --- Runtime ---
 api.get('/runtime/processes', (c) => {
