@@ -115,7 +115,7 @@ export function ModelsPage({ active }: { active: boolean }) {
   return (
     <div className={`page-content flex-col h-full w-full ${active ? 'active' : ''}`}>
       <div className="h-12 border-b border-app-border flex items-center justify-between px-6 shrink-0 bg-app-bg/50 backdrop-blur">
-        <h1 className="font-semibold text-app-textStrong">Agent Model Configuration</h1>
+        <h1 className="font-semibold text-app-textStrong">Adapter Model Configuration</h1>
         <span className="text-xs text-app-text border border-app-border px-2 py-0.5 rounded-full bg-app-surface">
           Installed Adapters
         </span>
@@ -123,7 +123,7 @@ export function ModelsPage({ active }: { active: boolean }) {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto space-y-6">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-app-textStrong">Per-Agent Model Routing</h2>
+            <h2 className="text-lg font-semibold text-app-textStrong">Per-Adapter Model Routing</h2>
             <p className="text-sm text-app-text mt-1">
               Each agent mode has its own provider and model — same as running <code className="text-xs bg-app-bg px-1 rounded">/mode</code> then{' '}
               <code className="text-xs bg-app-bg px-1 rounded">/models provider/model</code> in the CLI.
@@ -133,7 +133,7 @@ export function ModelsPage({ active }: { active: boolean }) {
           {activeAdapters.length === 0 ? (
             <div className="border border-dashed border-app-border rounded-xl p-16 flex flex-col items-center text-center">
               <Icon name="cpu" className="w-8 h-8 text-app-text/40 mb-3" />
-              <p className="text-sm text-app-text">No running CLI agents. Start adapters in the Adapters page to configure their models.</p>
+              <p className="text-sm text-app-text">No active adapters. Activate an adapter in the Adapters page to configure its models.</p>
             </div>
           ) : (
             activeAdapters.map((adapter) => {
