@@ -893,6 +893,16 @@ api.post('/workflows/:workflowId/resume', async (c) => {
 api.post('/workflows/:workflowId/cancel', async (c) => {
   const workflow = db.getWorkflow(c.req.param('workflowId'));
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  for (const task of db.listWorkflowTasks(workflow.id)) {
+    if (task.status !== 'running') continue;
+    const session = db.getRunningSessions().find((item) => item.taskId === task.id && item.processId);
+    if (session?.processId) {
+      await runtime.cancel(session.processId);
+      db.updateSession(session.id, { status: 'failed', endedAt: new Date().toISOString() });
+    }
+  }
+
   scheduler.cancelWorkflow(workflow.id);
   const updated = db.updateWorkflow(workflow.id, { status: 'cancelled' });
   return c.json(updated);
