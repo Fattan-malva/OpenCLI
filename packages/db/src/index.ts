@@ -164,8 +164,8 @@ export class OpenCLIRepository {
     const taskRow: Task = { ...task, id: randomUUID(), createdAt: now, updatedAt: now };
     this.db
       .prepare(
-        `INSERT INTO tasks (id, project_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, retry_count, max_retries, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, project_id, workflow_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, retry_count, max_retries, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         taskRow.id,
