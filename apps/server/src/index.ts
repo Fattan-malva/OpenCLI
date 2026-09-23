@@ -380,6 +380,24 @@ api.post('/projects/:projectId/sessions/mode', async (c) => {
   return c.json({ success: true, adapterId, mode });
 });
 
+async function applyProjectModelRouting(
+  projectId: string,
+  adapterId: string,
+  session: Awaited<ReturnType<typeof startSession>>,
+): Promise<void> {
+  const mode = session.activeMode;
+  if (!mode) return;
+  const selected = db.listModelRoutings(projectId)[adapterId]?.[mode];
+  if (!selected) return;
+
+  const result = await setSessionModel(projectId, adapterId, selected.provider, selected.model);
+  if (!result.ok) {
+    console.warn(
+      `[ModelRouting] Could not apply ${adapterId} ${mode} -> ${selected.provider}/${selected.model}: ${result.error}`,
+    );
+  }
+}
+
 // --- Adapter sessions (spawn / stop real CLI in project folder) ---
 api.post('/projects/:projectId/sessions/start', async (c) => {
   const projectId = c.req.param('projectId');
@@ -400,6 +418,7 @@ api.post('/projects/:projectId/sessions/start', async (c) => {
     adapterName: body.adapterName ?? adapterId,
     projectPath: project.path,
   });
+  await applyProjectModelRouting(projectId, adapterId, state);
   console.log(`[Server] Session state: ${state.status}, PID: ${state.pid}`);
 
   await eventBus.emit({
@@ -454,6 +473,7 @@ api.post('/projects/:projectId/sessions/start-all', async (c) => {
       adapterName: definition.name,
       projectPath: project.path,
     });
+    await applyProjectModelRouting(projectId, definition.id, state);
     results.push(state);
   }
   return c.json(results);
