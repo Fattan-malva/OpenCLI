@@ -147,6 +147,11 @@ export const api = {
       body: JSON.stringify({ adapterId }),
     });
   },
+  stopAllSessions(projectId: string) {
+    return request<{ success: boolean }>(`/projects/${encodeURIComponent(projectId)}/sessions/stop-all`, {
+      method: 'POST',
+    });
+  },
   listSessions(projectId: string) {
     return request<AdapterSession[]>(`/projects/${encodeURIComponent(projectId)}/sessions`);
   },
