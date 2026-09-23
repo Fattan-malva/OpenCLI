@@ -381,6 +381,17 @@ export class OpenCLIRepository {
     return row ? this.mapWorkspace(row) : undefined;
   }
 
+  updateWorkspace(id: string, updates: Partial<Workspace>): Workspace | undefined {
+    const existing = this.getWorkspace(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates };
+    this.db
+      .prepare('UPDATE workspaces SET path=?, branch=?, status=? WHERE id=?')
+      .run(updated.path, updated.branch ?? null, updated.status, id);
+    return updated;
+  }
+
+
   // === Locks ===
 
   acquireLock(lock: Omit<Lock, 'id' | 'createdAt'>): Lock | undefined {
