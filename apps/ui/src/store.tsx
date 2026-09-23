@@ -356,6 +356,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setScreen('app');
         setPage('workflow');
         await loadWorkflows(project.id);
+        await loadAdapters();
         await loadTasks(project.id);
         await loadEvents(project.id);
         return true;
@@ -417,8 +418,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTasks([]);
     setLogs([]);
     await loadWorkflows(project.id);
+    await loadAdapters();
     await Promise.all([loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
-  }, [loadSessions, loadTasks, loadWorkflows, loadEvents]);
+  }, [loadAdapters, loadSessions, loadTasks, loadWorkflows, loadEvents]);
 
   useEffect(() => {
     if (screen !== 'app' || !activeProject || !getToken()) return;
