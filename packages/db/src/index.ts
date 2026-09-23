@@ -164,8 +164,8 @@ export class OpenCLIRepository {
     const taskRow: Task = { ...task, id: randomUUID(), createdAt: now, updatedAt: now };
     this.db
       .prepare(
-        `INSERT INTO tasks (id, project_id, workflow_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, retry_count, max_retries, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, project_id, workflow_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, retry_count, max_retries, required_capabilities_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         taskRow.id,
@@ -181,6 +181,7 @@ export class OpenCLIRepository {
         taskRow.workspaceId ?? null,
         taskRow.retryCount,
         taskRow.maxRetries,
+        taskRow.requiredCapabilities ? JSON.stringify(taskRow.requiredCapabilities) : null,
         taskRow.createdAt,
         taskRow.updatedAt,
       );
@@ -231,7 +232,7 @@ export class OpenCLIRepository {
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     this.db
       .prepare(
-        `UPDATE tasks SET workflow_id=?, title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, retry_count=?, max_retries=?, updated_at=? WHERE id=?`,
+        `UPDATE tasks SET workflow_id=?, title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, retry_count=?, max_retries=?, required_capabilities_json=?, updated_at=? WHERE id=?`,
       )
       .run(
         updated.workflowId ?? null,
