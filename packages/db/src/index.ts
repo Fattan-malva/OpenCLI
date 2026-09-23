@@ -397,6 +397,50 @@ export class OpenCLIRepository {
     return rows.map((r) => this.mapSession(r));
   }
 
+  // === Runtime model routing ===
+
+  listModelRoutings(projectId: string): Record<string, Record<string, { provider: string; model: string }>> {
+    const rows = this.db
+      .prepare(
+        'SELECT agent_id, mode_id, provider, model FROM model_routings WHERE project_id = ? ORDER BY agent_id, mode_id',
+      )
+      .all(projectId) as Array<{
+      agent_id: string;
+      mode_id: string;
+      provider: string;
+      model: string;
+    }>;
+
+    const result: Record<string, Record<string, { provider: string; model: string }>> = {};
+    for (const row of rows) {
+      (result[row.agent_id] ??= {})[row.mode_id] = {
+        provider: row.provider,
+        model: row.model,
+      };
+    }
+    return result;
+  }
+
+  setModelRouting(
+    projectId: string,
+    agentId: string,
+    modeId: string,
+    provider: string,
+    model: string,
+  ): { projectId: string; agentId: string; modeId: string; provider: string; model: string; updatedAt: string } {
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO model_routings (project_id, agent_id, mode_id, provider, model, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, agent_id, mode_id)
+         DO UPDATE SET provider=excluded.provider, model=excluded.model, updated_at=excluded.updated_at`,
+      )
+      .run(projectId, agentId, modeId, provider, model, updatedAt);
+
+    return { projectId, agentId, modeId, provider, model, updatedAt };
+  }
+
   // === Settings (key/value) ===
 
   getSetting(key: string): string | undefined {
