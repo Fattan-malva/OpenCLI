@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { AGENTS, providerRegistry, useStore } from '../store';
+import { ADAPTERS, providerRegistry, useStore } from '../store';
 import { api } from '../lib/api';
 import type { AdapterInfo, AdapterMode, Task } from '../lib/types';
 import { Icon } from '../lib/icons';
-import type { AgentConfigs } from '../lib/types';
+import type { AdapterConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
+  const { modal, closeModal, adapterConfigs, saveAdapterConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -17,11 +17,11 @@ export function Modal() {
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDesc, setWorkflowDesc] = useState('');
   const [availableModes, setAvailableModes] = useState<AdapterMode[]>([]);
-  const [draft, setDraft] = useState<AgentConfigs[string] | null>(null);
+  const [draft, setDraft] = useState<AdapterConfigs[string] | null>(null);
 
   useEffect(() => {
-    if (modal?.kind === 'agentConfig' && modal.agentId) {
-      const cfg = agentConfigs[modal.agentId];
+    if (modal?.kind === 'adapterConfig' && modal.agentId) {
+      const cfg = adapterConfigs[modal.agentId];
       setDraft(cfg ? JSON.parse(JSON.stringify(cfg)) : { modes: {} });
     }
     if (modal?.kind === 'addTask') {
@@ -38,7 +38,7 @@ export function Modal() {
       setWorkflowName('');
       setWorkflowDesc('');
     }
-  }, [modal, agentConfigs, adapters]);
+  }, [modal, adapterConfigs, adapters]);
 
   useEffect(() => {
     if (modal?.kind !== 'addTask' || !activeProject || !agentId) return;
@@ -115,8 +115,8 @@ export function Modal() {
               modes={availableModes}
             />
           )}
-          {modal.kind === 'agentConfig' && modal.agentId && draft && (
-            <AgentConfigBody agentId={modal.agentId} draft={draft} setField={setField} />
+          {modal.kind === 'adapterConfig' && modal.agentId && draft && (
+            <AdapterConfigBody agentId={modal.agentId} draft={draft} setField={setField} />
           )}
         </div>
 
@@ -132,13 +132,13 @@ export function Modal() {
             />
           )}
           {modal.kind === 'addTask' && <AddTaskFooter />}
-          {modal.kind === 'agentConfig' && modal.agentId && draft && (
-            <AgentConfigFooter
+          {modal.kind === 'adapterConfig' && modal.agentId && draft && (
+            <AdapterConfigFooter
               agentId={modal.agentId}
               onSave={() => {
-                saveAgentConfig(modal.agentId!, draft.modes);
+                saveAdapterConfig(modal.agentId!, draft.modes);
                 closeModal();
-                showToast('Configuration Saved', `Updated capabilities for ${AGENTS[modal.agentId!].name}`, 'success');
+                showToast('Configuration Saved', `Updated capabilities for ${ADAPTERS[modal.agentId!].name}`, 'success');
                 addLog('config.updated', `Updated capabilities config for agent ${modal.agentId}`, 'system');
               }}
             />
@@ -443,16 +443,16 @@ function AddTaskFooter() {
   );
 }
 
-function AgentConfigBody({
+function AdapterConfigBody({
   agentId,
   draft,
   setField,
 }: {
   agentId: string;
-  draft: AgentConfigs[string];
+  draft: AdapterConfigs[string];
   setField: (mode: string, field: 'provider' | 'model', value: string) => void;
 }) {
-  const agent = AGENTS[agentId];
+  const agent = ADAPTERS[agentId];
   if (!agent) return null;
 
   return (
@@ -515,7 +515,7 @@ function AgentConfigBody({
   );
 }
 
-function AgentConfigFooter({ onSave }: { agentId: string; onSave: () => void }) {
+function AdapterConfigFooter({ onSave }: { agentId: string; onSave: () => void }) {
   const { closeModal } = useStore();
   return (
     <>
