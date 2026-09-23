@@ -42,7 +42,9 @@ export function ModelsPage({ active }: { active: boolean }) {
     setLoading((l) => ({ ...l, [adapterId]: true }));
     setError((e) => ({ ...e, [adapterId]: null }));
     try {
-      const data = await api.getCapabilities(adapterId, false);
+      const data = activeProject
+        ? await api.getProjectAdapterCapabilities(activeProject.id, adapterId)
+        : await api.getCapabilities(adapterId, false);
       setCaps((c) => ({ ...c, [adapterId]: data }));
     } catch (e: any) {
       setError((err) => ({ ...err, [adapterId]: e?.message ?? 'Failed to load capabilities' }));
