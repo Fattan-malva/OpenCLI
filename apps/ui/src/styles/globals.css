@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Segoe UI Mono',
+    monospace;
+
+  --color-app-bg: #0f0f11;
+  --color-app-surface: #18181b;
+  --color-app-border: #27272a;
+  --color-app-hover: #27272a;
+  --color-app-text: #a1a1aa;
+  --color-app-textStrong: #f4f4f5;
+  --color-app-primary: #6366f1;
+  --color-app-success: #10b981;
+  --color-app-warning: #f59e0b;
+  --color-app-danger: #ef4444;
+  --color-app-info: #3b82f6;
+
+  /* Reference overrides the global `pulse` keyframes with a scaling ring */
+  --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  @keyframes pulse {
+    0% {
+      transform: scale(0.8);
+      opacity: 0.5;
+    }
+    100% {
+      transform: scale(2);
+      opacity: 0;
+    }
+  }
+}
+
+/* Developer Tool Aesthetics - Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0f0f11;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+body {
+  background-color: #0f0f11;
+  color: #f4f4f5;
+  overflow: hidden;
+}
+
+.terminal-glow {
+  text-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+}
+
+.task-card {
+  transition: all 0.2s ease;
+}
+.task-card:hover {
+  border-color: #3f3f46;
+  transform: translateY(-1px);
+}
+
+/* Loader for running tasks */
+.pulse-ring {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.pulse-ring::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background-color: #6366f1;
+  opacity: 0.4;
+  animation: pulse 2s ease-out infinite;
+}
+
+.page-content {
+  display: none;
+  animation: fadeIn 0.2s ease-out;
+}
+.page-content.active {
+  display: flex;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.modal-overlay {
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+.toast-enter {
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Tailwind v3 `placeholder-{color}` util removed in v4; restore it for parity */
+.placeholder-app-text\/50::placeholder {
+  color: rgba(161, 161, 170, 0.5);
+}

@@ -1,0 +1,163 @@
+import type { ReactNode } from 'react';
+import { AGENTS, useStore } from '../store';
+import { logTypeColor } from '../store';
+import { Icon } from '../lib/icons';
+import type { LogEntry } from '../lib/types';
+
+function HighlightJson({ json }: { json: string }) {
+  const token =
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = token.exec(json)) !== null) {
+    if (m.index > last) nodes.push(json.slice(last, m.index));
+    let cls = 'text-blue-400';
+    if (/^"/.test(m[0])) cls = /:$/.test(m[0]) ? 'text-indigo-300 font-medium' : 'text-emerald-400';
+    else if (/true|false/.test(m[0])) cls = 'text-amber-400';
+    else if (/null/.test(m[0])) cls = 'text-rose-400';
+    nodes.push(
+      <span key={key++} className={cls}>
+        {m[0]}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (last < json.length) nodes.push(json.slice(last));
+  return <>{nodes}</>;
+}
+
+function LogLine({ entry }: { entry: LogEntry }) {
+  const { time, type, message, agentId, taskId } = entry;
+  const typeColor = logTypeColor(type);
+  const shortType = type.split('.').pop() ?? type;
+  const agent = agentId ? AGENTS[agentId] : undefined;
+
+  return (
+    <div className="mb-1 hover:bg-white/[0.02] -mx-4 px-4 py-0.5 rounded transition-colors">
+      <span className="text-slate-600 select-none mr-2">{time}</span>
+      <span className={`${typeColor} font-semibold w-24 inline-block align-top`}>{shortType}</span>
+      {taskId && <span className="text-slate-500 mx-1">[{taskId}]</span>}
+      {agent && (
+        <span
+          className={`${agent.color} ${agent.bg} border ${agent.border} px-1.5 py-0.5 rounded mx-1 text-[9px] font-bold uppercase tracking-wider`}
+        >
+          {agentId}
+        </span>
+      )}
+      {typeof message === 'object' ? (
+        <>
+          <br />
+          <span className="text-slate-500 pl-4 whitespace-pre-wrap">{JSON.stringify(message, null, 2)}</span>
+        </>
+      ) : (
+        <span className="text-slate-300 break-words">{message}</span>
+      )}
+    </div>
+  );
+}
+
+export function RightPanel() {
+  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks } = useStore();
+
+  const contextData = {
+    project: {
+      name: 'marketplace-v2',
+      path: 'C:/Projects/marketplace',
+      settings: { maxParallelAgents: 4, defaultMode: 'build' },
+    },
+    activeTasks: tasks.filter((t) => t.status === 'RUNNING').map((t) => t.id),
+    memory: {
+      lastArtifacts: ['src/auth/jwt.ts', 'src/auth/middleware.ts'],
+      globalConstraints: ['Use TypeScript', 'No Any types'],
+    },
+    systemStats: {
+      uptime: '02:15:43',
+      totalEvents: logs.length,
+    },
+  };
+
+  return (
+    <aside className="w-80 lg:w-96 border-l border-app-border flex flex-col bg-app-surface shrink-0 z-10">
+      {/* Panel Header / Tabs */}
+      <div className="flex h-10 border-b border-app-border shrink-0 text-xs font-medium">
+        <button
+          onClick={() => switchRightTab('logs')}
+          className={`flex-1 flex items-center justify-center transition-colors ${
+            rightTab === 'logs'
+              ? 'border-b-2 border-app-primary text-app-textStrong bg-app-hover'
+              : 'border-b-2 border-transparent text-app-text hover:text-app-textStrong hover:bg-app-hover'
+          }`}
+        >
+          <Icon name="terminal" className="w-4 h-4 mr-2" /> Event Bus Logs
+        </button>
+        <button
+          onClick={() => switchRightTab('context')}
+          className={`flex-1 flex items-center justify-center transition-colors ${
+            rightTab === 'context'
+              ? 'border-b-2 border-app-primary text-app-textStrong bg-app-hover'
+              : 'border-b-2 border-transparent text-app-text hover:text-app-textStrong hover:bg-app-hover'
+          }`}
+        >
+          <Icon name="file-json" className="w-4 h-4 mr-2" /> Context
+        </button>
+      </div>
+
+      {/* Terminal Output Area */}
+      {rightTab === 'logs' && (
+        <div
+          ref={terminalRef}
+          className="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed relative bg-[#09090b]"
+        >
+          <div className="sticky top-0 w-full flex justify-end pb-2 opacity-50 hover:opacity-100 transition-opacity z-10">
+            <button
+              onClick={clearLogs}
+              className="p-1.5 rounded bg-app-border text-app-text hover:text-white hover:bg-app-hover backdrop-blur"
+              title="Clear Logs"
+            >
+              <Icon name="trash-2" className="w-3 h-3" />
+            </button>
+          </div>
+          {logs.map((entry, i) => (
+            <LogLine key={i} entry={entry} />
+          ))}
+        </div>
+      )}
+
+      {/* Context Output Area */}
+      {rightTab === 'context' && (
+        <div className="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed relative bg-[#09090b]">
+          <pre className="text-app-info">
+            <HighlightJson json={JSON.stringify(contextData, null, 2)} />
+          </pre>
+        </div>
+      )}
+
+      {/* Global Resource Monitor */}
+      <div className="h-32 border-t border-app-border bg-app-surface p-4 flex flex-col gap-2 text-xs">
+        <div className="text-app-textStrong font-medium mb-1 flex items-center">
+          <Icon name="activity" className="w-3.5 h-3.5 mr-1.5" /> Resource Utilization
+        </div>
+        <div className="space-y-1">
+          <div className="flex justify-between text-app-text">
+            <span>Concurrent Agents</span>
+            <span>2 / 4</span>
+          </div>
+          <div className="w-full bg-app-bg rounded-full h-1.5">
+            <div className="bg-app-primary h-1.5 rounded-full" style={{ width: '50%' }}></div>
+          </div>
+        </div>
+        <div className="space-y-1 mt-2">
+          <div className="flex justify-between text-app-text">
+            <span>API Rate Limit (Tokens/min)</span>
+            <span>42k / 100k</span>
+          </div>
+          <div className="w-full bg-app-bg rounded-full h-1.5">
+            <div className="bg-app-warning h-1.5 rounded-full" style={{ width: '42%' }}></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
