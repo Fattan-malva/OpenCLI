@@ -96,11 +96,38 @@ export const api = {
   getCapabilities(id: string, force = false) {
     return request<AdapterCapabilities>(`/adapters/${encodeURIComponent(id)}/capabilities${force ? '?force=1' : ''}`);
   },
-  saveCapabilities(id: string, patch: { provider?: string; model?: string; mode?: string }) {
-    return request<AdapterCapabilities>(`/adapters/${encodeURIComponent(id)}/capabilities`, {
-      method: 'PUT',
-      body: JSON.stringify(patch),
-    });
+  getModelRouting(projectId: string) {
+    return request<Record<string, Record<string, { provider: string; model: string }>>>(
+      `/projects/${encodeURIComponent(projectId)}/model-routing`,
+    );
+  },
+  setModelRouting(
+    projectId: string,
+    agentId: string,
+    modeId: string,
+    provider: string,
+    model: string,
+  ) {
+    return request<{
+      routing: { projectId: string; agentId: string; modeId: string; provider: string; model: string; updatedAt: string };
+      applied: boolean;
+      applyError?: string;
+    }>(
+      `/projects/${encodeURIComponent(projectId)}/model-routing/${encodeURIComponent(agentId)}/${encodeURIComponent(modeId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ provider, model }),
+      },
+    );
+  },
+  setSessionMode(projectId: string, adapterId: string, mode: string) {
+    return request<{ success: boolean; adapterId: string; mode: string }>(
+      `/projects/${encodeURIComponent(projectId)}/sessions/mode`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ adapterId, mode }),
+      },
+    );
   },
   startSession(projectId: string, adapterId: string, adapterName?: string) {
     return request<AdapterSession>(`/projects/${encodeURIComponent(projectId)}/sessions/start`, {
