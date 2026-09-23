@@ -36,7 +36,7 @@ export type AppScreen = 'boot' | 'auth' | 'projects' | 'app';
 
 export interface ModalState {
   title: string;
-  kind: 'settings' | 'addTask' | 'agentConfig' | 'newProject';
+  kind: 'settings' | 'addTask' | 'agentConfig' | 'newProject' | 'newWorkflow';
   agentId?: string;
 }
 
