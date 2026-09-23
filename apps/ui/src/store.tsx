@@ -195,6 +195,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const showPage = (p: PageId) => setPage(p);
   const switchRightTab = (t: RightTab) => setRightTab(t);
 
+  const addLog = (type: string, message: string | Record<string, unknown>, agentId?: string, taskId?: string) => {
+    setLogs((prev) => [...prev, { time: formatLogTime(), type, message, agentId, taskId }]);
+  };
+
   const login = useCallback(async (pin: string): Promise<boolean> => {
     try {
       const res = await api.login(pin);
@@ -220,6 +224,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setActiveProject(null);
     setScreen('auth');
+  }, []);
+
+  const goToProjects = useCallback(() => {
+    setActiveProject(null);
+    setActiveWorkflow(null);
+    setWorkflows([]);
+    setTasks([]);
+    setLogs([]);
+    setPage('workflow');
+    setScreen('projects');
   }, []);
 
   const loadProjects = useCallback(async (): Promise<void> => {
@@ -459,11 +473,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!event.type || event.type === 'connected') return;
         if (event.projectId && event.projectId !== activeProject.id) return;
 
-        if (event.timestamp) {
+        const eventTimestamp = event.timestamp;
+        if (eventTimestamp) {
           setLogs((prev) => [
             ...prev,
             {
-              time: new Date(event.timestamp).toLocaleTimeString('en-US', {
+              time: new Date(eventTimestamp).toLocaleTimeString('en-US', {
                 hour12: false,
                 hour: '2-digit',
                 minute: '2-digit',
@@ -517,10 +532,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     icon: string,
     pulse: boolean,
   ) => setGlobalStatus({ text, color, icon, pulse });
-
-  const addLog = (type: string, message: string | Record<string, unknown>, agentId?: string, taskId?: string) => {
-    setLogs((prev) => [...prev, { time: formatLogTime(), type, message, agentId, taskId }]);
-  };
 
   useEffect(() => {
     if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
