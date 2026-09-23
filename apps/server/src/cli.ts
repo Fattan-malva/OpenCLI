@@ -1,8 +1,8 @@
 // Dynamic CLI probing + config read/write.
 // All executables resolved via PATH scan (findExecutable) and config paths from
 // homedir() so this works on any machine regardless of install location.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { adapterCommand, detectOS, findExecutable, runExecutable, type Platform } from '@opencli/discovery';
 
@@ -322,78 +322,3 @@ export function invalidateCapability(adapterId: string): void {
   MODE_CACHE.delete(adapterId);
 }
 
-// --- config write ---
-
-interface WritePatch {
-  provider?: string;
-  model?: string;
-  mode?: string;
-}
-
-function resolveConfigTarget(adapterId: string): { path: string; format: 'json' } {
-  if (adapterId === 'claude') return { path: claudeConfigPath(), format: 'json' };
-  if (adapterId === 'opencode') return { path: opencodeConfigPath(), format: 'json' };
-  return { path: kiloConfigPath(), format: 'json' };
-}
-
-function ensureDir(filePath: string): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-}
-
-export async function writeCapabilityConfig(adapterId: string, patch: WritePatch): Promise<AdapterCapabilities | null> {
-  if (!isAdapterInstalled(adapterId)) return null;
-
-  const { path, format } = resolveConfigTarget(adapterId);
-  ensureDir(path);
-
-  let cfg: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    try {
-      cfg = JSON.parse(readFileSync(path, 'utf-8'));
-    } catch {
-      cfg = {};
-    }
-  }
-
-  if (adapterId === 'claude') {
-    const env = { ...(typeof cfg.env === 'object' && cfg.env ? (cfg.env as Record<string, string>) : {}) };
-    if (patch.model) env.ANTHROPIC_DEFAULT_SONNET_MODEL = patch.model;
-    if (patch.mode) {
-      if (patch.mode !== 'default') cfg.defaultMode = patch.mode;
-      else delete cfg.defaultMode;
-    }
-    cfg.env = env;
-  } else {
-    const agents = (typeof cfg.agent === 'object' && cfg.agent ? cfg.agent : {}) as Record<
-      string,
-      Record<string, unknown>
-    >;
-    const spec =
-      patch.provider && patch.model
-        ? `${patch.provider}/${patch.model}`
-        : patch.model
-          ? patch.model
-          : undefined;
-
-    if (patch.mode && spec) {
-      agents[patch.mode] = { ...(agents[patch.mode] ?? {}), model: spec };
-      cfg.agent = agents;
-      cfg.mode = patch.mode;
-    } else if (spec) {
-      const activeMode = String(patch.mode ?? cfg.mode ?? '');
-      if (activeMode) {
-        agents[activeMode] = { ...(agents[activeMode] ?? {}), model: spec };
-        cfg.agent = agents;
-      } else {
-        cfg.model = spec;
-      }
-    } else if (patch.mode) {
-      cfg.mode = patch.mode;
-    }
-  }
-
-  writeFileSync(path, format === 'json' ? JSON.stringify(cfg, null, 2) : JSON.stringify(cfg, null, 2));
-  console.log(`[CLI] Config written for ${adapterId}:`, patch);
-  invalidateCapability(adapterId);
-  return probeCapabilities(adapterId, true);
-}
