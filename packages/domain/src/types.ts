@@ -140,6 +140,8 @@ export type EventType =
   | 'agent.discovered'
   | 'agent.started'
   | 'agent.output'
+  | 'agent.question'
+  | 'agent.confirmation_requested'
   | 'agent.tool_called'
   | 'agent.file_changed'
   | 'agent.permission_requested'
