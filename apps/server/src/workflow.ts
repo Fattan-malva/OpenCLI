@@ -251,6 +251,8 @@ async function waitForProcess(runtime: ProcessManager, processId: string, timeou
 export function refreshWorkflow(deps: WorkflowRuntime, workflowId: string): void {
   const workflow = deps.db.getWorkflow(workflowId);
   if (!workflow) return;
+  if (workflow.status === 'cancelled') return;
+
   const tasks = deps.db.listWorkflowTasks(workflowId);
   if (tasks.length === 0) return;
 
