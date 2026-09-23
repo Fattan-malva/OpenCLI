@@ -246,6 +246,7 @@ export class OpenCLIRepository {
         updated.workspaceId ?? null,
         updated.retryCount,
         updated.maxRetries,
+        updated.requiredCapabilities ? JSON.stringify(updated.requiredCapabilities) : null,
         updated.updatedAt,
         id,
       );
@@ -611,6 +612,7 @@ export class OpenCLIRepository {
       modelId: row.model_id ?? undefined,
       workspaceId: row.workspace_id ?? undefined,
       fileScopes,
+      requiredCapabilities: row.required_capabilities_json ? JSON.parse(row.required_capabilities_json) : undefined,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
       createdAt: row.created_at,
