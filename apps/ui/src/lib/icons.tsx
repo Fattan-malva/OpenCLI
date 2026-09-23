@@ -53,6 +53,15 @@ import {
   KeyRound,
   Database,
   Copy,
+  ListChecks,
+  LoaderCircle,
+  CircleCheck,
+  CircleDot,
+  Circle,
+  Workflow,
+  Square,
+  PlayCircle,
+  Ban,
 } from 'lucide-react';
 
 const ICONS: Record<string, LucideIcon> = {
@@ -109,6 +118,15 @@ const ICONS: Record<string, LucideIcon> = {
   'key-round': KeyRound,
   database: Database,
   copy: Copy,
+  'list-checks': ListChecks,
+  'loader-circle': LoaderCircle,
+  'circle-check': CircleCheck,
+  'circle-dot': CircleDot,
+  circle: Circle,
+  workflow: Workflow,
+  square: Square,
+  'play-circle': PlayCircle,
+  ban: Ban,
 };
 
 export function Icon({
