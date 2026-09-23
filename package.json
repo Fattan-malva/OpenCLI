@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "start": "npx tsx bin/opencli.ts",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @opencli/domain && npm run build --workspaces --if-present",
     "build:ui": "npm run build -w @opencli/ui",
     "typecheck": "tsc -b",
     "lint": "eslint packages/ adapters/ apps/ --ext .ts,.tsx",
