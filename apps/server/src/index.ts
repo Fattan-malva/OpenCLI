@@ -319,9 +319,9 @@ api.get('/projects/:projectId/adapters/:adapterId/capabilities', async (c) => {
   if (!project) return c.json({ error: 'Project not found' }, 404);
 
   try {
-    const capabilities = await probeCapabilities(adapterId, false);
     const session = getSession(projectId, adapterId);
     const runtimeModes = await getSessionAgentModes(projectId, adapterId);
+    const capabilities = await probeCapabilities(adapterId, false, runtimeModes.length > 0 ? runtimeModes : undefined);
 
     // When the adapter is running, prefer its live server agent catalog.
     // This includes project-local agents and avoids brittle CLI-output parsing.
