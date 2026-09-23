@@ -231,7 +231,25 @@ export const api = {
     fileScopes?: string[];
     priority?: number;
   }) {
-    return request(`/projects/${encodeURIComponent(projectId)}/tasks`, {
+    return request<{
+      id: string;
+      workflowId?: string;
+      projectId: string;
+      title: string;
+      description?: string;
+      status: string;
+      priority: number;
+      dependencies: string[];
+      agentId?: string;
+      modeId?: string;
+      modelId?: string;
+      workspaceId?: string;
+      fileScopes: string[];
+      retryCount: number;
+      maxRetries: number;
+      createdAt: string;
+      updatedAt: string;
+    }>(`/projects/${encodeURIComponent(projectId)}/tasks`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
