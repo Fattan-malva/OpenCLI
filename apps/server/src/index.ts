@@ -842,6 +842,19 @@ api.post('/workflows/:workflowId/start', async (c) => {
 api.post('/workflows/:workflowId/pause', async (c) => {
   const workflow = db.getWorkflow(c.req.param('workflowId'));
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  for (const task of db.listWorkflowTasks(workflow.id)) {
+    if (task.status === 'running' && task.workspaceId) {
+      const sessions = db.listSessions({ taskId: task.id });
+      const session = sessions.find((item) => item.status === 'running');
+      if (session?.processId) {
+        await runtime.pause(session.processId);
+        db.updateSession(session.id, { status: 'paused' });
+        db.updateTask(task.id, { status: 'paused' });
+      }
+    }
+  }
+
   scheduler.pauseWorkflow(workflow.id);
   const updated = db.updateWorkflow(workflow.id, { status: 'paused' });
   return c.json(updated);
@@ -850,6 +863,19 @@ api.post('/workflows/:workflowId/pause', async (c) => {
 api.post('/workflows/:workflowId/resume', async (c) => {
   const workflow = db.getWorkflow(c.req.param('workflowId'));
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  for (const task of db.listWorkflowTasks(workflow.id)) {
+    if (task.status === 'paused' && task.workspaceId) {
+      const sessions = db.listSessions({ taskId: task.id });
+      const session = sessions.find((item) => item.status === 'paused');
+      if (session?.processId) {
+        await runtime.resume(session.processId);
+        db.updateSession(session.id, { status: 'running' });
+        db.updateTask(task.id, { status: 'running' });
+      }
+    }
+  }
+
   loadWorkflowIntoScheduler(workflow.id);
   scheduler.resumeWorkflow(workflow.id);
   const updated = db.updateWorkflow(workflow.id, { status: 'running' });
