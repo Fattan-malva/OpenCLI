@@ -138,10 +138,12 @@ export function AdaptersPage({ active }: { active: boolean }) {
                 return (
                   <div
                     key={adapter.id}
-                    className={`bg-app-surface border rounded-lg p-5 flex flex-col transition-colors ${
-                      isRunning
-                        ? 'border-app-border hover:border-[#3f3f46]'
-                        : 'border-app-border opacity-70'
+                    className={`adapter-card bg-app-surface border rounded-lg p-5 flex flex-col transition-colors ${
+                      isBusy
+                        ? 'adapter-card-shimmer border-app-primary/40'
+                        : isRunning
+                          ? 'border-app-border hover:border-[#3f3f46]'
+                          : 'border-app-border opacity-70'
                     }`}
                   >
                     <div className="flex justify-between items-start mb-4">
@@ -157,7 +159,11 @@ export function AdaptersPage({ active }: { active: boolean }) {
                           </p>
                         </div>
                       </div>
-                      {isRunning ? (
+                      {isBusy ? (
+                        <span className="flex items-center text-indigo-300 text-xs font-medium bg-indigo-500/10 px-2 py-1 rounded border border-indigo-500/20">
+                          <Icon name="loader-2" className="w-3 h-3 mr-1.5 animate-spin" /> {isRunning ? 'Stopping…' : 'Activating…'}
+                        </span>
+                      ) : isRunning ? (
                         <span className="flex items-center text-indigo-400 text-xs font-medium bg-indigo-500/10 px-2 py-1 rounded border border-indigo-500/20">
                           <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 mr-1.5 animate-pulse"></span> Active
                         </span>
