@@ -21,7 +21,7 @@ import { join, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { probeCapabilities } from './cli.js';
-import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel } from './sessions.js';
+import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes } from './sessions.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -307,6 +307,38 @@ api.get('/adapters/:id/capabilities', async (c) => {
   try {
     const caps = await probeCapabilities(id, force);
     return c.json(caps);
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? 'probe failed' }, 500);
+  }
+});
+
+api.get('/projects/:projectId/adapters/:adapterId/capabilities', async (c) => {
+  const projectId = c.req.param('projectId');
+  const adapterId = c.req.param('adapterId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  try {
+    const capabilities = await probeCapabilities(adapterId, false);
+    const session = getSession(projectId, adapterId);
+    const runtimeModes = await getSessionAgentModes(projectId, adapterId);
+
+    // When the adapter is running, prefer its live server agent catalog.
+    // This includes project-local agents and avoids brittle CLI-output parsing.
+    if (runtimeModes.length > 0) {
+      return c.json({
+        ...capabilities,
+        modes: runtimeModes,
+        current: {
+          ...capabilities.current,
+          mode: session?.activeMode ?? capabilities.current.mode,
+          provider: session?.activeProvider ?? capabilities.current.provider,
+          model: session?.activeModel ?? capabilities.current.model,
+        },
+      });
+    }
+
+    return c.json(capabilities);
   } catch (e: any) {
     return c.json({ error: e?.message ?? 'probe failed' }, 500);
   }
