@@ -19,7 +19,7 @@ export const STATUS: Record<TaskStatus, StatusMeta> = {
   PENDING: { label: 'Pending', icon: 'clock', classes: 'text-app-text bg-app-border/50 border-app-border' },
   RUNNING: { label: 'Running', icon: 'loader-2', classes: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20 animate-pulse-border' },
   PAUSED: { label: 'Paused', icon: 'pause-circle', classes: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  ASK: { label: 'Requires Input', icon: 'message-square-dashed', classes: 'text-sky-400 bg-sky-500/10 border-sky-500/30 ring-1 ring-sky-500/50 animate-pulse' },
+  ASK: { label: 'Requires Input', icon: 'message-square-dashed', classes: 'text-sky-400 bg-sky-500/10 border-sky-500/30' },
   REVIEW: { label: 'Needs Review', icon: 'eye', classes: 'text-amber-400 bg-amber-500/10 border-amber-500/30 ring-1 ring-amber-500/50' },
   COMPLETED: { label: 'Completed', icon: 'check-circle-2', classes: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   FAILED: { label: 'Failed', icon: 'x-circle', classes: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
