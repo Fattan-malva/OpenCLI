@@ -342,7 +342,9 @@ export async function startSession(opts: {
 
   state.child = child;
   state.pid = child.pid ?? null;
-  if (state.pid) state.status = 'running';
+  // Serve-based adapters are only truly active after their HTTP runtime
+  // and remote session are ready. Keep the UI in a real loading state until then.
+  if (state.pid && !SERVE_ADAPTERS.has(adapterId)) state.status = 'running';
   SESSIONS.set(key(projectId, adapterId), state);
 
   // Attach lifecycle listeners immediately after spawn. OpenCode may exit
@@ -379,13 +381,15 @@ export async function startSession(opts: {
 
   try {
     await createRemoteSession(state);
+    if (alive(state)) state.status = 'running';
   } catch (error: any) {
-    // Keep the adapter process alive even if its optional HTTP control plane is unavailable.
+    state.status = 'failed';
+    state.endedAt = new Date().toISOString();
     state.error = error?.message ?? 'Failed to initialize runtime session';
     console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
   }
 
-  return { ...state, status: alive(state) ? 'running' : state.status };
+  return { ...state, status: alive(state) ? (state.status === 'starting' ? 'running' : state.status) : state.status };
 }
 
 export async function stopSession(projectId: string, adapterId: string): Promise<boolean> {
