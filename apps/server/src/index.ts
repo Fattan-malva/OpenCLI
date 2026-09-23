@@ -852,7 +852,7 @@ api.post('/workflows/:workflowId/pause', async (c) => {
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
 
   for (const task of db.listWorkflowTasks(workflow.id)) {
-    if (task.status === 'running' && task.workspaceId) {
+    if (task.status === 'running') {
       const sessions = db.getRunningSessions().filter((session) => session.taskId === task.id);
       const session = sessions.find((item) => item.status === 'running');
       if (session?.processId) {
@@ -876,7 +876,7 @@ api.post('/workflows/:workflowId/resume', async (c) => {
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
 
   for (const task of db.listWorkflowTasks(workflow.id)) {
-    if (task.status === 'paused' && task.workspaceId) {
+    if (task.status === 'paused') {
       const sessions = db.listSessions({ taskId: task.id });
       const session = sessions.find((item) => item.status === 'paused');
       if (session?.processId) {
