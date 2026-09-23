@@ -7,11 +7,13 @@ import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, showToast, addLog, adapters, activeProject } = useStore();
+  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
   const [mode, setMode] = useState('');
+  const [workflowName, setWorkflowName] = useState('');
+  const [workflowDesc, setWorkflowDesc] = useState('');
   const [availableModes, setAvailableModes] = useState<AdapterMode[]>([]);
   const [draft, setDraft] = useState<AgentConfigs[string] | null>(null);
 
@@ -27,6 +29,10 @@ export function Modal() {
       setAgentId(firstAdapter?.id ?? '');
       setAvailableModes([]);
       setMode('');
+    }
+    if (modal?.kind === 'newWorkflow') {
+      setWorkflowName('');
+      setWorkflowDesc('');
     }
   }, [modal, agentConfigs, adapters]);
 
@@ -78,6 +84,14 @@ export function Modal() {
 
         <div className="p-6 overflow-y-auto">
           {modal.kind === 'settings' && <SettingsBody />}
+          {modal.kind === 'newWorkflow' && (
+            <NewWorkflowBody
+              name={workflowName}
+              setName={setWorkflowName}
+              description={workflowDesc}
+              setDescription={setWorkflowDesc}
+            />
+          )}
           {modal.kind === 'addTask' && (
             <AddTaskBody
               title={title}
@@ -99,6 +113,13 @@ export function Modal() {
 
         <div className="px-6 py-4 border-t border-app-border bg-app-bg flex justify-end space-x-3">
           {modal.kind === 'settings' && <SettingsFooter />}
+          {modal.kind === 'newWorkflow' && (
+            <NewWorkflowFooter
+              name={workflowName}
+              description={workflowDesc}
+              createWorkflow={createWorkflow}
+            />
+          )}
           {modal.kind === 'addTask' && <AddTaskFooter />}
           {modal.kind === 'agentConfig' && modal.agentId && draft && (
             <AgentConfigFooter
@@ -114,6 +135,73 @@ export function Modal() {
         </div>
       </div>
     </div>
+  );
+}
+
+function NewWorkflowBody({
+  name,
+  setName,
+  description,
+  setDescription,
+}: {
+  name: string;
+  setName: (value: string) => void;
+  description: string;
+  setDescription: (value: string) => void;
+}) {
+  return (
+    <form id="new-workflow-form" className="space-y-4 text-sm">
+      <div>
+        <label className="block text-app-text mb-1 font-medium">Workflow Name</label>
+        <input
+          type="text"
+          required
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. Build Purchase Request"
+          className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary"
+        />
+      </div>
+      <div>
+        <label className="block text-app-text mb-1 font-medium">Description</label>
+        <textarea
+          rows={4}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          placeholder="What should this workflow accomplish?"
+          className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
+        />
+      </div>
+    </form>
+  );
+}
+
+function NewWorkflowFooter({
+  name,
+  description,
+  createWorkflow,
+}: {
+  name: string;
+  description: string;
+  createWorkflow: (name: string, description?: string) => Promise<boolean>;
+}) {
+  return (
+    <>
+      <button type="button" onClick={() => undefined} className="px-4 py-2 rounded text-app-text hover:text-white transition-colors">
+        Cancel
+      </button>
+      <button
+        form="new-workflow-form"
+        type="submit"
+        onClick={(event) => {
+          event.preventDefault();
+          void createWorkflow(name, description);
+        }}
+        className="px-4 py-2 rounded bg-app-primary hover:bg-indigo-600 text-white transition-colors"
+      >
+        Create Workflow
+      </button>
+    </>
   );
 }
 
