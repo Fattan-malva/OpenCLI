@@ -13,7 +13,6 @@ import {
 import {
   AGENTS,
   initialAgentConfigs,
-  initialTasks,
   providerRegistry,
   STATUS,
 } from './lib/data';
@@ -30,6 +29,7 @@ import type {
   Task,
   Toast,
   ToastType,
+  WorkflowRecord,
 } from './lib/types';
 
 export type AppScreen = 'boot' | 'auth' | 'projects' | 'app';
@@ -57,6 +57,10 @@ export interface Store {
   switchRightTab: (t: RightTab) => void;
   tasks: Task[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
+  workflows: WorkflowRecord[];
+  activeWorkflow: WorkflowRecord | null;
+  loadWorkflows: (projectId: string) => Promise<void>;
+  loadTasks: (projectId: string) => Promise<void>;
   paused: boolean;
   togglePauseAll: () => void;
   globalStatus: GlobalStatus;
@@ -74,7 +78,7 @@ export interface Store {
   agentConfigs: AgentConfigs;
   saveAgentConfig: (agentId: string, modes: AgentConfigs[string]['modes']) => void;
   updateAgentRoute: (agentId: string, mode: string, field: 'provider' | 'model', value: string) => void;
-  submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string }) => void;
+  submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string }) => Promise<boolean>;
   adapters: AdapterInfo[];
   loadAdapters: () => Promise<void>;
   setAdapterActive: (id: string, active: boolean) => Promise<void>;
@@ -105,6 +109,41 @@ export function useStore(): Store {
   return ctx;
 }
 
+function mapBackendTask(task: {
+  id: string;
+  workflowId?: string;
+  title: string;
+  description?: string;
+  status: string;
+  agentId?: string;
+  modeId?: string;
+  workspaceId?: string;
+  dependencies: string[];
+}): Task {
+  const statusMap: Record<string, Task['status']> = {
+    pending: 'PENDING',
+    ready: 'READY',
+    running: 'RUNNING',
+    paused: 'PAUSED',
+    failed: 'FAILED',
+    blocked: 'BLOCKED',
+    review: 'REVIEW',
+    completed: 'COMPLETED',
+    cancelled: 'FAILED',
+  };
+  return {
+    id: task.id,
+    workflowId: task.workflowId,
+    title: task.title,
+    description: task.description ?? '',
+    status: statusMap[task.status] ?? 'PENDING',
+    agentId: task.agentId ?? 'system',
+    mode: task.modeId ?? 'build',
+    workspace: task.workspaceId ?? 'project',
+    dependencies: task.dependencies,
+  };
+}
+
 function logTypeColor(type: string): string {
   if (type.includes('error') || type.includes('failed')) return 'text-rose-400';
   if (type.includes('completed') || type.includes('success')) return 'text-emerald-400';
@@ -130,7 +169,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
   const [page, setPage] = useState<PageId>('workflow');
   const [rightTab, setRightTab] = useState<RightTab>('todo');
-  const [tasks, setTasks] = useState<Task[]>(() => JSON.parse(JSON.stringify(initialTasks)));
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [activeWorkflow, setActiveWorkflow] = useState<WorkflowRecord | null>(null);
   const [paused, setPaused] = useState(false);
   const [globalStatus, setGlobalStatus] = useState<GlobalStatus>({
     text: 'Orchestrating (2 Agents Active)',
@@ -147,7 +188,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [sessions, setSessionsState] = useState<AdapterSession[]>([]);
-  const simStarted = useRef(false);
 
   const showPage = (p: PageId) => setPage(p);
   const switchRightTab = (t: RightTab) => setRightTab(t);
@@ -195,13 +235,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setActiveProject(project);
         setScreen('app');
         setPage('workflow');
+        await loadWorkflows(project.id);
+        await loadTasks(project.id);
         return true;
       } catch {
         return false;
       }
     },
-    [loadProjects],
-  );
+    [loadProjects, loadTasks, loadWorkflows],
 
   const deleteProject = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -231,6 +272,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [adapters]);
 
+  const loadWorkflows = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const list = await api.listWorkflows(projectId);
+      setWorkflows(list);
+      setActiveWorkflow(list.find((workflow) => workflow.status === 'running' || workflow.status === 'paused') ?? list[0] ?? null);
+    } catch {
+      setWorkflows([]);
+      setActiveWorkflow(null);
+    }
+  }, []);
+
+  const loadTasks = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const list = await api.listTasks(projectId);
+      setTasks(list.map(mapBackendTask));
+    } catch {
+      setTasks([]);
+    }
+  }, []);
+
   const loadSessions = useCallback(async (projectId: string): Promise<void> => {
     try {
       setSessions(await api.listSessions(projectId));
@@ -251,9 +312,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setActiveProject(project);
     setScreen('app');
     setPage('workflow');
-    // Load sessions for the project to show current status
-    loadSessions(project.id).catch(() => undefined);
-  }, [loadSessions]);
+    setTasks([]);
+    void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadSessions(project.id)]);
+  }, [loadLoadSessions]);
 
   useEffect(() => {
     if (screen === 'app') {
@@ -360,90 +421,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const closeModal = () => setModal(null);
 
-  const submitNewTask = (opts: { title: string; desc: string; agentId: string; mode: string }) => {
-    const id = 'T00' + (tasks.length + 1);
-    const newTask: Task = {
-      id,
-      title: opts.title,
-      description: opts.desc,
-      status: 'PENDING',
-      agentId: opts.agentId,
-      mode: opts.mode,
-      workspace: 'worktree/' + id,
-      dependencies: [],
-    };
-    setTasks((prev) => [...prev, newTask]);
-    closeModal();
-    showToast('Task Queued', `Task ${id} has been added to the planner.`, 'success');
-    addLog('task.created', `New task added: ${opts.title}`, 'system', id);
+  const submitNewTask = async (opts: { title: string; desc: string; agentId: string; mode: string }): Promise<boolean> => {
+    if (!activeProject) {
+      showToast('No Project', 'Open a project before creating a workflow task.', 'warning');
+      return false;
+    }
+    try {
+      const created = await api.createTask(activeProject.id, {
+        title: opts.title,
+        description: opts.desc,
+        workflowId: activeWorkflow?.id,
+        agentId: opts.agentId,
+        modeId: opts.mode,
+      });
+      const task = mapBackendTask(created);
+      setTasks((prev) => [...prev, task]);
+      await loadWorkflows(activeProject.id);
+      closeModal();
+      showToast('Task Queued', `Task ${task.id} has been added to the workflow.`, 'success');
+      addLog('task.created', `New task added: ${opts.title}`, 'system', task.id);
+      return true;
+    } catch (error: any) {
+      showToast('Task Failed', error?.message ?? 'Unable to create task.', 'error');
+      return false;
+    }
   };
-
-  // Boot simulation replicating reference.html startSimulation()
-  useEffect(() => {
-    if (simStarted.current) return;
-    simStarted.current = true;
-
-    addLog('system.boot', 'OpenCLI Core initialized.');
-    addLog('workspace.manager', 'Detected 1 main repository, 3 active worktrees.');
-
-    const t1 = window.setTimeout(() => {
-      addLog('agent.output', 'Compiling TypeScript models...', 'codex', 'T002');
-    }, 2000);
-
-    const t2 = window.setTimeout(() => {
-      addLog('agent.permission_requested', 'Command execution blocked by policy.', 'codex', 'T002');
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === 'T002'
-            ? {
-                ...t,
-                status: 'ASK',
-                agentRequest: {
-                  type: 'permission',
-                  message: 'I need to install the argon2 package to implement secure password hashing.',
-                  command: 'npm install argon2 --save',
-                },
-              }
-            : t,
-        ),
-      );
-      updateGlobalStatus('Input Required', 'sky', 'message-square-dashed', true);
-    }, 4500);
-
-    const t3 = window.setTimeout(() => {
-      addLog('agent.tool_called', { tool: 'readFile', file: 'src/api/routes.ts' }, 'opencode', 'T003');
-    }, 6000);
-
-    const t4 = window.setTimeout(() => {
-      addLog('agent.ask', 'Requesting architectural decision from user.', 'opencode', 'T003');
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === 'T003'
-            ? {
-                ...t,
-                status: 'ASK',
-                agentRequest: {
-                  type: 'choice',
-                  message: 'Should I implement the Product API using REST or GraphQL? Both are supported in the codebase context.',
-                  options: [
-                    'Use standard REST endpoints (Express.js)',
-                    'Setup a GraphQL schema and resolvers',
-                  ],
-                },
-              }
-            : t,
-        ),
-      );
-    }, 8500);
-
-    return () => {
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-      window.clearTimeout(t3);
-      window.clearTimeout(t4);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const value: Store = {
     screen,
@@ -462,6 +464,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     switchRightTab,
     tasks,
     setTasks,
+    workflows,
+    activeWorkflow,
+    loadWorkflows,
+    loadTasks,
     paused,
     togglePauseAll,
     globalStatus,
