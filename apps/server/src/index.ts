@@ -119,6 +119,8 @@ function getSystemSettings() {
   }
 }
 
+scheduler.setMaxConcurrent(getSystemSettings().maxParallelAgents);
+
 // Register adapters
 const openCodeAdapter = new OpenCodeAdapter();
 const kiloCodeAdapter = new KiloCodeAdapter();
@@ -180,12 +182,19 @@ for (const project of db.listProjects()) {
 function ensureDefaultWorkflow(projectId: string) {
   const existing = db.listWorkflows(projectId);
   if (existing.length > 0) return existing[0];
-  return db.createWorkflow({
+  const workflow = db.createWorkflow({
     projectId,
     name: 'Manual Workflow',
     description: 'Tasks created directly from OpenCLI.',
     status: 'draft',
   });
+  void eventBus.emit({
+    type: 'workflow.created',
+    projectId,
+    workflowId: workflow.id,
+    payload: { name: workflow.name, automatic: true },
+  });
+  return workflow;
 }
 
 function loadWorkflowIntoScheduler(workflowId: string) {
@@ -659,13 +668,6 @@ api.post('/projects/:projectId/tasks', async (c) => {
   });
 
   scheduler.addTask(task);
-
-  await eventBus.emit({
-    type: 'task.created',
-    taskId: task.id,
-    projectId: task.projectId,
-    payload: { title: task.title, workflowId: workflow.id },
-  });
 
   return c.json(task, 201);
 });
