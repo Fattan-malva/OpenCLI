@@ -4,7 +4,7 @@ import { RightPanel } from './components/RightPanel';
 import { Modal } from './components/Modal';
 import { Toasts } from './components/Toasts';
 import { WorkflowPage } from './pages/WorkflowPage';
-import { AgentsPage } from './pages/AgentsPage';
+import { AdaptersPage } from './pages/AdaptersPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { WorkspacesPage } from './pages/WorkspacesPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -21,7 +21,7 @@ function Shell() {
         <Sidebar />
         <main className="flex-1 flex flex-col bg-app-bg min-w-0 relative">
           <WorkflowPage active={page === 'workflow'} />
-          <AgentsPage active={page === 'agents'} />
+          <AdaptersPage active={page === 'agents'} />
           <ModelsPage active={page === 'models'} />
           <WorkspacesPage active={page === 'workspaces'} />
           <SettingsPage active={page === 'settings'} />
