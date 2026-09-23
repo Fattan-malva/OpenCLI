@@ -134,11 +134,12 @@ async function createRemoteSession(entry: SessionEntry): Promise<void> {
   // Read runtime agents from the running server instead of parsing CLI text.
   // This keeps project-local Plan/Build/custom agents aligned with reality.
   const agents = await listRemoteAgents(entry.serverUrl);
-  const selectable = agents.filter((agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'));
-  const activeAgent =
-    selectable.find((agent) => agent.name === 'build') ??
-    selectable.find((agent) => agent.name === 'plan') ??
-    selectable[0];
+  // Never hardcode agent names. The adapter is the source of truth.
+  // OpenCLI only considers visible primary-capable agents.
+  const selectable = agents.filter(
+    (agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'),
+  );
+  const activeAgent = selectable[0];
 
   // Pin the configured model when the server exposes one so a headless
   // session does not silently resolve to an unrelated catalog default.
