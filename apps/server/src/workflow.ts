@@ -84,6 +84,9 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
   const gitInfo = deps.gitService.getInfo(project.path);
   const shouldIsolate = gitInfo.isRepository && !gitInfo.hasUncommittedChanges;
   const worktree = shouldIsolate ? deps.gitService.createWorktree(project.path, task.id) : undefined;
+  if (shouldIsolate && !worktree) {
+    return { success: false, error: 'Could not create an isolated Git worktree for this task' };
+  }
   const workspacePath = worktree?.path ?? project.path;
 
   if (gitInfo.isRepository && gitInfo.hasUncommittedChanges) {
