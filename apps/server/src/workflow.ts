@@ -189,27 +189,27 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
     }
 
     if (worktree) {
-      const diff = deps.gitService.getDiff(worktree.path);
-      if (diff.trim()) {
+      const changed = deps.gitService.hasChanges(worktree.path);
+      if (changed) {
         const commit = deps.gitService.commit(worktree.path, `opencli: ${task.title}`);
-        if (!commit.success) {
+        if (!commit.success && deps.gitService.hasChanges(worktree.path)) {
           if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'conflict' });
           return { success: false, error: commit.error ?? 'Could not commit workflow changes' };
         }
+      }
 
-        const merge = deps.gitService.merge(project.path, worktree.branch);
-        if (!merge.success) {
-          if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'conflict' });
-          deps.eventBus.emit({
-            type: 'workspace.conflict',
-            projectId: project.id,
-            workflowId: task.workflowId,
-            taskId: task.id,
-            agentId: adapterId,
-            payload: { branch: worktree.branch, error: merge.error },
-          }).catch(() => undefined);
-          return { success: false, error: merge.error ?? 'Could not merge workflow changes' };
-        }
+      const merge = deps.gitService.merge(project.path, worktree.branch);
+      if (!merge.success) {
+        if (task.workspaceId) deps.db.updateWorkspace(task.workspaceId, { status: 'conflict' });
+        deps.eventBus.emit({
+          type: 'workspace.conflict',
+          projectId: project.id,
+          workflowId: task.workflowId,
+          taskId: task.id,
+          agentId: adapterId,
+          payload: { branch: worktree.branch, error: merge.error },
+        }).catch(() => undefined);
+        return { success: false, error: merge.error ?? 'Could not merge workflow changes' };
       }
 
       deps.gitService.removeWorktree(project.path, task.id);
