@@ -1,8 +1,10 @@
 // Adapter session manager: runs CLI commands in the open project folder,
 // the same way you would type `opencode`, `kilo`, or `claude` in a terminal.
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { adapterCommand } from '@opencli/discovery';
+import { probeCapabilities } from './cli.js';
 
 export interface SessionState {
   projectId: string;
@@ -14,6 +16,11 @@ export interface SessionState {
   endedAt?: string;
   command?: string;
   error?: string;
+  serverUrl?: string;
+  sessionId?: string;
+  activeMode?: string;
+  activeProvider?: string;
+  activeModel?: string;
 }
 
 interface SessionEntry extends SessionState {
@@ -26,10 +33,127 @@ function key(projectId: string, adapterId: string): string {
   return `${projectId}:${adapterId}`;
 }
 
-const SERVE_ARGS: Record<string, (() => string[]) | undefined> = {
-  opencode: () => ['serve', '--port', '0'],
-  kilocode: () => ['serve', '--port', '0'],
-};
+const SERVE_ADAPTERS = new Set(['opencode', 'kilocode']);
+
+function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+function serveArgs(adapterId: string, port: number): string[] | undefined {
+  if (!SERVE_ADAPTERS.has(adapterId)) return undefined;
+  return ['serve', '--port', String(port), '--hostname', '127.0.0.1'];
+}
+
+async function requestJson(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 5000,
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+  });
+  let data: any = undefined;
+  try {
+    data = await response.json();
+  } catch {
+    // Some successful endpoints intentionally return no JSON body.
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+async function waitForServer(baseUrl: string, timeoutMs = 15_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    for (const path of ['/global/health', '/api/global/health']) {
+      try {
+        const res = await requestJson(`${baseUrl}${path}`, {}, 1500);
+        if (res.ok) return;
+      } catch {
+        // Server is still booting.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Adapter server did not become ready at ${baseUrl}`);
+}
+
+async function createRemoteSession(entry: SessionEntry): Promise<void> {
+  if (!entry.serverUrl || !SERVE_ADAPTERS.has(entry.adapterId)) return;
+
+  await waitForServer(entry.serverUrl);
+
+  const capabilities = await probeCapabilities(entry.adapterId, true).catch(() => undefined);
+  const activeMode = capabilities?.current.mode || capabilities?.modes[0]?.id;
+  const activeProvider = capabilities?.current.provider;
+  const activeModel = capabilities?.current.model;
+
+  const body: Record<string, unknown> = {};
+  if (activeMode) body.agent = activeMode;
+  if (activeProvider && activeModel) {
+    body.model = { providerID: activeProvider, id: activeModel };
+  }
+
+  let created: any;
+  for (const endpoint of ['/api/session', '/session']) {
+    try {
+      const response = await requestJson(`${entry.serverUrl}${endpoint}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (response.ok) {
+        created = response.data;
+        break;
+      }
+    } catch {
+      // Try the compatibility endpoint below.
+    }
+  }
+
+  const session = created?.data ?? created;
+  const sessionId = session?.id;
+  if (!sessionId) {
+    throw new Error(`Failed to create ${entry.adapterId} runtime session`);
+  }
+
+  entry.sessionId = String(sessionId);
+  entry.activeMode = activeMode;
+  entry.activeProvider = activeProvider;
+  entry.activeModel = activeModel;
+}
+
+async function postSessionRuntime(
+  entry: SessionEntry,
+  path: 'agent' | 'model',
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!entry.serverUrl || !entry.sessionId) return { ok: false, error: 'Runtime session is not ready' };
+
+  const endpoints = [`/api/session/${encodeURIComponent(entry.sessionId)}/${path}`, `/session/${encodeURIComponent(entry.sessionId)}/${path}`];
+  let lastError = 'Runtime session endpoint unavailable';
+  for (const endpoint of endpoints) {
+    try {
+      const response = await requestJson(`${entry.serverUrl}${endpoint}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) return { ok: true };
+      lastError = `${response.status}: ${response.data?.message ?? response.data?.error ?? 'request failed'}`;
+    } catch (error: any) {
+      lastError = error?.message ?? lastError;
+    }
+  }
+  return { ok: false, error: lastError };
+}
 
 function claudeArgs(): string[] {
   return ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
@@ -103,8 +227,8 @@ export async function startSession(opts: {
     return state;
   }
 
-  const build = SERVE_ARGS[adapterId];
-  const args = adapterId === 'claude' ? claudeArgs() : build ? build() : [];
+  const port = SERVE_ADAPTERS.has(adapterId) ? await getFreePort() : undefined;
+  const args = adapterId === 'claude' ? claudeArgs() : (port ? serveArgs(adapterId, port) ?? [] : []);
   const now = new Date().toISOString();
   const commandLine = `${cmd} ${args.join(' ')}`.trim();
 
@@ -116,6 +240,7 @@ export async function startSession(opts: {
     status: 'starting',
     startedAt: now,
     command: commandLine,
+    serverUrl: port ? `http://127.0.0.1:${port}` : undefined,
   };
 
   return new Promise((resolve) => {
@@ -146,6 +271,15 @@ export async function startSession(opts: {
     state.pid = child.pid ?? null;
     if (state.pid) state.status = 'running';
     SESSIONS.set(key(projectId, adapterId), state);
+
+    try {
+      await createRemoteSession(state);
+    } catch (error: any) {
+      // Keep the adapter session alive even if its optional HTTP control plane is unavailable.
+      state.error = error?.message ?? 'Failed to initialize runtime session';
+      console.warn(`[${adapterId}] Runtime session initialization failed:`, state.error);
+    }
+
     finish(state);
 
     child.stdout?.on('data', (data) => {
@@ -212,6 +346,70 @@ export function stopAll(projectId: string): void {
   for (const [k, entry] of SESSIONS.entries()) {
     if (entry.projectId !== projectId) continue;
     SESSIONS.delete(k);
+  }
+}
+
+export async function setSessionMode(
+  projectId: string,
+  adapterId: string,
+  mode: string,
+): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const entry = SESSIONS.get(key(projectId, adapterId));
+  if (!entry || !alive(entry)) return { ok: false, error: 'Session not running' };
+
+  if (SERVE_ADAPTERS.has(adapterId)) {
+    const remote = await postSessionRuntime(entry, 'agent', { agent: mode });
+    if (remote.ok) {
+      entry.activeMode = mode;
+      return { ok: true, output: `Session agent switched to ${mode}` };
+    }
+    // Fall back to the same slash command the CLI TUI understands.
+  }
+
+  if (!entry.child?.stdin) return { ok: false, error: 'Process stdin unavailable' };
+  try {
+    if (adapterId === 'claude') {
+      entry.child.stdin.write(JSON.stringify({ type: 'mode', mode }) + '\\n');
+    } else {
+      entry.child.stdin.write(`/mode ${mode}\\n`);
+    }
+    entry.activeMode = mode;
+    return { ok: true, output: `Sent mode switch to ${mode}` };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? 'Failed to switch session mode' };
+  }
+}
+
+export async function setSessionModel(
+  projectId: string,
+  adapterId: string,
+  provider: string,
+  model: string,
+): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const entry = SESSIONS.get(key(projectId, adapterId));
+  if (!entry || !alive(entry)) return { ok: false, error: 'Session not running' };
+
+  if (SERVE_ADAPTERS.has(adapterId)) {
+    const remote = await postSessionRuntime(entry, 'model', { model: { providerID: provider, id: model } });
+    if (remote.ok) {
+      entry.activeProvider = provider;
+      entry.activeModel = model;
+      return { ok: true, output: `Session model switched to ${provider}/${model}` };
+    }
+  }
+
+  if (!entry.child?.stdin) return { ok: false, error: 'Process stdin unavailable' };
+  try {
+    if (adapterId === 'claude') {
+      entry.child.stdin.write(JSON.stringify({ type: 'config', model: `${provider}/${model}` }) + '\\n');
+    } else {
+      entry.child.stdin.write(`/models ${provider}/${model}\\n`);
+    }
+    entry.activeProvider = provider;
+    entry.activeModel = model;
+    return { ok: true, output: `Sent model switch to ${provider}/${model}` };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? 'Failed to switch session model' };
   }
 }
 
