@@ -217,7 +217,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const stopProjectSessions = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      await api.stopAllSessions(projectId);
+    } catch (error) {
+      console.warn('[OpenCLI] Could not stop project adapters:', error);
+    }
+    setSessionsState([]);
+  }, []);
+
   const logout = useCallback(async (): Promise<void> => {
+    if (activeProject) await stopProjectSessions(activeProject.id);
     try {
       await api.logout();
     } catch {
@@ -225,10 +235,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     setToken(null);
     setActiveProject(null);
+    setActiveWorkflow(null);
+    setWorkflows([]);
+    setTasks([]);
+    setLogs([]);
     setScreen('auth');
-  }, []);
+  }, [activeProject, stopProjectSessions]);
 
-  const goToProjects = useCallback(() => {
+  const goToProjects = useCallback(async (): Promise<void> => {
+    if (activeProject) await stopProjectSessions(activeProject.id);
     setActiveProject(null);
     setActiveWorkflow(null);
     setWorkflows([]);
@@ -236,7 +251,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setLogs([]);
     setPage('workflow');
     setScreen('projects');
-  }, []);
+  }, [activeProject, stopProjectSessions]);
 
   const loadProjects = useCallback(async (): Promise<void> => {
     try {
@@ -412,6 +427,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const openProject = useCallback(async (project: ProjectRecord) => {
+    if (activeProject && activeProject.id !== project.id) {
+      await stopProjectSessions(activeProject.id);
+    }
     setActiveProject(project);
     setScreen('app');
     setPage('workflow');
@@ -420,7 +438,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await loadWorkflows(project.id);
     await loadAdapters();
     await Promise.all([loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
-  }, [loadAdapters, loadSessions, loadTasks, loadWorkflows, loadEvents]);
+  }, [activeProject, stopProjectSessions, loadAdapters, loadSessions, loadTasks, loadWorkflows, loadEvents]);
 
   useEffect(() => {
     if (screen !== 'app' || !activeProject || !getToken()) return;
