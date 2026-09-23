@@ -61,6 +61,7 @@ export interface Store {
   activeWorkflow: WorkflowRecord | null;
   loadWorkflows: (projectId: string) => Promise<void>;
   loadTasks: (projectId: string) => Promise<void>;
+  loadEvents: (projectId: string) => Promise<void>;
   selectWorkflow: (workflow: WorkflowRecord) => Promise<void>;
   paused: boolean;
   togglePauseAll: () => Promise<void>;
@@ -254,7 +255,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setTasks([]);
     }
-  }, [activeProject?.id]);
+  }, [activeProject?.id, loadEvents]);
 
   const loadTasks = useCallback(async (projectId: string): Promise<void> => {
     try {
@@ -275,12 +276,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setPage('workflow');
         await loadWorkflows(project.id);
         await loadTasks(project.id);
+        await loadEvents(project.id);
         return true;
       } catch {
         return false;
       }
     },
-    [loadProjects, loadTasks, loadWorkflows],
+    [loadProjects, loadTasks, loadWorkflows, loadEvents],
   );
 
   const deleteProject = useCallback(async (id: string): Promise<boolean> => {
@@ -311,6 +313,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [adapters]);
 
+  const loadEvents = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const events = await api.listEvents(projectId, 200);
+      setLogs(events.reverse().map((event) => ({
+        time: new Date(event.timestamp).toLocaleTimeString('en-US', {
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          fractionalSecondDigits: 3,
+        } as Intl.DateTimeFormatOptions),
+        type: event.type,
+        message: event.payload,
+        agentId: event.agentId,
+        taskId: event.taskId,
+      })));
+    } catch {
+      setLogs([]);
+    }
+  }, []);
+
   const loadSessions = useCallback(async (projectId: string): Promise<void> => {
     try {
       setSessions(await api.listSessions(projectId));
@@ -332,7 +355,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setScreen('app');
     setPage('workflow');
     setTasks([]);
-    void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadSessions(project.id)]);
+    setLogs([]);
+    void Promise.all([loadWorkflows(project.id), loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
   }, [loadSessions, loadTasks, loadWorkflows]);
 
   useEffect(() => {
@@ -340,19 +364,74 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const stream = new EventSource(`/api/events/stream?projectId=${encodeURIComponent(activeProject.id)}`);
     let refreshTimer: number | undefined;
+    const stateEvents = new Set([
+      'workflow.created',
+      'workflow.started',
+      'workflow.paused',
+      'workflow.resumed',
+      'workflow.completed',
+      'workflow.failed',
+      'workflow.cancelled',
+      'task.ready',
+      'task.started',
+      'task.blocked',
+      'task.completed',
+      'task.failed',
+      'task.retried',
+      'task.cancelled',
+      'workspace.created',
+      'workspace.conflict',
+      'workspace.released',
+      'agent.started',
+      'agent.completed',
+      'agent.failed',
+      'agent.crashed',
+    ]);
 
     const scheduleRefresh = () => {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(() => {
-        void Promise.all([loadWorkflows(activeProject.id), loadTasks(activeProject.id), loadSessions(activeProject.id)]);
+        void Promise.all([
+          loadWorkflows(activeProject.id),
+          loadTasks(activeProject.id),
+          loadSessions(activeProject.id),
+        ]);
       }, 120);
     };
 
     stream.onmessage = (message) => {
       try {
-        const event = JSON.parse(message.data) as { type?: string; projectId?: string };
+        const event = JSON.parse(message.data) as {
+          type?: string;
+          projectId?: string;
+          taskId?: string;
+          agentId?: string;
+          timestamp?: string;
+          payload?: Record<string, unknown>;
+        };
         if (!event.type || event.type === 'connected') return;
-        if (!event.projectId || event.projectId === activeProject.id) scheduleRefresh();
+        if (event.projectId && event.projectId !== activeProject.id) return;
+
+        if (event.timestamp) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              time: new Date(event.timestamp).toLocaleTimeString('en-US', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                fractionalSecondDigits: 3,
+              } as Intl.DateTimeFormatOptions),
+              type: event.type ?? 'event',
+              message: event.payload ?? {},
+              agentId: event.agentId,
+              taskId: event.taskId,
+            },
+          ].slice(-1000));
+        }
+
+        if (stateEvents.has(event.type ?? '')) scheduleRefresh();
       } catch {
         // Ignore malformed event payloads.
       }
@@ -363,17 +442,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (refreshTimer) window.clearTimeout(refreshTimer);
     };
   }, [screen, activeProject?.id, loadWorkflows, loadTasks, loadSessions]);
-
-  useEffect(() => {
-    if (screen === 'app') {
-      loadAdapters();
-    }
-  }, [screen, loadAdapters]);
-
-  const goToProjects = useCallback(() => {
-    setActiveProject(null);
-    setScreen('projects');
-  }, []);
 
   useEffect(() => {
     (async () => {
@@ -529,6 +597,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeWorkflow,
     loadWorkflows,
     loadTasks,
+    loadEvents,
     selectWorkflow,
     paused,
     togglePauseAll,
