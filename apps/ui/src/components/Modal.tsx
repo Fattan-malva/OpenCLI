@@ -7,11 +7,13 @@ import { Icon } from '../lib/icons';
 import type { AgentConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, agentConfigs, saveAgentConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject } = useStore();
+  const { modal, closeModal, agentConfigs, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, tasks } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
   const [mode, setMode] = useState('');
+  const [dependencies, setDependencies] = useState<string[]>([]);
+  const [fileScopes, setFileScopes] = useState('');
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDesc, setWorkflowDesc] = useState('');
   const [availableModes, setAvailableModes] = useState<AdapterMode[]>([]);
@@ -29,6 +31,8 @@ export function Modal() {
       setAgentId(firstAdapter?.id ?? '');
       setAvailableModes([]);
       setMode('');
+      setDependencies([]);
+      setFileScopes('');
     }
     if (modal?.kind === 'newWorkflow') {
       setWorkflowName('');
@@ -102,6 +106,11 @@ export function Modal() {
               setAgentId={setAgentId}
               mode={mode}
               setMode={setMode}
+              dependencies={dependencies}
+              setDependencies={setDependencies}
+              fileScopes={fileScopes}
+              setFileScopes={setFileScopes}
+              availableTasks={tasks.filter((task) => task.workflowId === activeProject?.id || task.workflowId)}
               adapters={adapters.filter((adapter) => adapter.installed && adapter.active)}
               modes={availableModes}
             />
@@ -283,6 +292,11 @@ function AddTaskBody({
   setAgentId,
   mode,
   setMode,
+  dependencies,
+  setDependencies,
+  fileScopes,
+  setFileScopes,
+  availableTasks,
   adapters,
   modes,
 }: {
@@ -294,6 +308,11 @@ function AddTaskBody({
   setAgentId: (v: string) => void;
   mode: string;
   setMode: (v: string) => void;
+  dependencies: string[];
+  setDependencies: (value: string[]) => void;
+  fileScopes: string;
+  setFileScopes: (value: string) => void;
+  availableTasks: Array<{ id: string; title: string }>;
   adapters: AdapterInfo[];
   modes: AdapterMode[];
 }) {
@@ -301,7 +320,7 @@ function AddTaskBody({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    submitNewTask({ title, desc, agentId, mode });
+    submitNewTask({ title, desc, agentId, mode, dependencies, fileScopes: fileScopes.split(/\s*,\s*|\n/).map((scope) => scope.trim()).filter(Boolean) });
   };
 
   return (
@@ -328,6 +347,42 @@ function AddTaskBody({
           className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
         ></textarea>
       </div>
+      <div>
+        <label className="block text-app-text mb-1 font-medium">File Scope</label>
+        <input
+          type="text"
+          value={fileScopes}
+          onChange={(event) => setFileScopes(event.target.value)}
+          placeholder="src/auth/**, src/api/**"
+          className="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-app-primary"
+        />
+        <div className="text-[10px] text-app-text mt-1">Used by the scheduler to avoid editing the same files in parallel.</div>
+      </div>
+      {availableTasks.length > 0 && (
+        <div>
+          <label className="block text-app-text mb-1 font-medium">Dependencies</label>
+          <div className="max-h-28 overflow-y-auto rounded border border-app-border bg-app-bg divide-y divide-app-border/60">
+            {availableTasks.map((task) => (
+              <label key={task.id} className="flex items-center gap-2 px-3 py-2 text-xs text-app-textStrong cursor-pointer hover:bg-app-hover">
+                <input
+                  type="checkbox"
+                  checked={dependencies.includes(task.id)}
+                  onChange={(event) => {
+                    setDependencies(
+                      event.target.checked
+                        ? [...dependencies, task.id]
+                        : dependencies.filter((id) => id !== task.id),
+                    );
+                  }}
+                  className="accent-app-primary"
+                />
+                <span className="font-mono text-[10px] text-app-text">{task.id}</span>
+                <span className="truncate">{task.title}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-app-text mb-1 font-medium">Runtime Adapter</label>
