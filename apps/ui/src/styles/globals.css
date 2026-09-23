@@ -125,3 +125,47 @@ body {
 .placeholder-app-text\/50::placeholder {
   color: rgba(161, 161, 170, 0.5);
 }
+/* Static status badges with a subtle animated border shimmer. */
+.status-shimmer {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.status-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    transparent 35%,
+    rgba(255, 255, 255, 0.08) 46%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0.08) 54%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-position: 120% 0;
+  animation: status-border-shimmer 2.8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+@keyframes status-border-shimmer {
+  0%, 100% { background-position: 120% 0; }
+  50% { background-position: -20% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-shimmer::before {
+    animation: none;
+  }
+}
