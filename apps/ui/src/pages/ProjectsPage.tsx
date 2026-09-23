@@ -8,6 +8,7 @@ export function ProjectsPage() {
   const { projects, loadProjects, openProject, screen, createProject, deleteProject, logout, openModal, showToast } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   useEffect(() => {
     if (screen === 'projects') loadProjects();
@@ -42,10 +43,7 @@ export function ProjectsPage() {
             <Icon name="settings" className="w-4 h-4" />
           </button>
           <button
-            onClick={() => {
-              logout();
-              showToast('Logged Out', 'Session PIN ended.', 'info');
-            }}
+            onClick={() => setLogoutOpen(true)}
             className="p-2 rounded hover:bg-app-hover text-app-text transition-colors"
             title="Logout"
           >
@@ -53,6 +51,20 @@ export function ProjectsPage() {
           </button>
         </div>
       </header>
+
+      {logoutOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 modal-overlay" onClick={() => setLogoutOpen(false)} />
+          <div className="relative w-full max-w-sm mx-4 bg-app-surface border border-app-border rounded-xl shadow-2xl p-5">
+            <h2 className="font-semibold text-app-textStrong">Logout OpenCLI?</h2>
+            <p className="text-sm text-app-text mt-2">Logout akan mengakhiri sesi OpenCLI. Adapter yang masih berjalan akan dihentikan.</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setLogoutOpen(false)} className="px-3 py-1.5 rounded text-xs text-app-text hover:bg-app-hover">Cancel</button>
+              <button onClick={async () => { setLogoutOpen(false); await logout(); showToast('Logged Out', 'Session ended and adapters were stopped.', 'info'); }} className="px-3 py-1.5 rounded text-xs bg-rose-600 hover:bg-rose-500 text-white">Logout</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 overflow-y-auto p-8">
         <div className="max-w-5xl mx-auto">
