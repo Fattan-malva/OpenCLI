@@ -15,6 +15,7 @@ export function WorkflowPage({ active }: { active: boolean }) {
     loadWorkflows,
     loadTasks,
     showToast,
+    selectWorkflow,
   } = useStore();
 
   return (
@@ -40,11 +41,19 @@ export function WorkflowPage({ active }: { active: boolean }) {
             <button
               onClick={async () => {
                 try {
-                  await api.resumeWorkflow(activeWorkflow.id);
+                  if (activeWorkflow.status === 'draft') {
+                    await api.startWorkflow(activeWorkflow.id);
+                  } else {
+                    await api.resumeWorkflow(activeWorkflow.id);
+                  }
                   if (activeProject) {
                     await Promise.all([loadWorkflows(activeProject.id), loadTasks(activeProject.id)]);
                   }
-                  showToast('Workflow Resumed', 'Scheduler will dispatch ready tasks.', 'success');
+                  showToast(
+                    activeWorkflow.status === 'draft' ? 'Workflow Started' : 'Workflow Resumed',
+                    'Scheduler will dispatch ready tasks.',
+                    'success',
+                  );
                 } catch (error: any) {
                   showToast('Workflow Error', error?.message ?? 'Unable to resume workflow.', 'error');
                 }
@@ -100,19 +109,8 @@ export function WorkflowPage({ active }: { active: boolean }) {
               {workflows.map((workflow) => (
                 <button
                   key={workflow.id}
-                  onClick={async () => {
-                    try {
-                      const nextTasks = await api.getWorkflowTasks(workflow.id);
-                      await Promise.all([
-                        loadWorkflows(activeProject?.id ?? workflow.projectId),
-                        loadTasks(activeProject?.id ?? workflow.projectId),
-                      ]);
-                      if (!nextTasks.length) {
-                        showToast('Empty Workflow', 'This workflow does not have any tasks yet.', 'info');
-                      }
-                    } catch (error: any) {
-                      showToast('Workflow Error', error?.message ?? 'Unable to load workflow.', 'error');
-                    }
+                  onClick={() => {
+                    void selectWorkflow(workflow);
                   }}
                   className={`shrink-0 px-2.5 py-1.5 rounded border text-xs transition-colors ${
                     activeWorkflow?.id === workflow.id
