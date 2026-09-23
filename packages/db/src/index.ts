@@ -2,6 +2,8 @@
 import { randomUUID } from 'node:crypto';
 import type {
   Project,
+  Workflow,
+  WorkflowStatus,
   Agent,
   Provider,
   Model,
@@ -31,6 +33,61 @@ export class OpenCLIRepository {
 
   close(): void {
     this.db.close();
+  }
+
+  // === Projects ===
+
+  createWorkflow(workflow: Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>): Workflow {
+    const now = new Date().toISOString();
+    const row: Workflow = { ...workflow, id: randomUUID(), createdAt: now, updatedAt: now };
+    this.db.prepare(
+      `INSERT INTO workflows (id, project_id, name, description, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.id,
+      row.projectId,
+      row.name,
+      row.description ?? null,
+      row.status,
+      row.createdAt,
+      row.updatedAt,
+    );
+    return row;
+  }
+
+  getWorkflow(id: string): Workflow | undefined {
+    const row = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as any;
+    return row ? this.mapWorkflow(row) : undefined;
+  }
+
+  listWorkflows(projectId: string): Workflow[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM workflows WHERE project_id = ? ORDER BY updated_at DESC',
+    ).all(projectId) as any[];
+    return rows.map((row) => this.mapWorkflow(row));
+  }
+
+  updateWorkflow(id: string, updates: Partial<Workflow>): Workflow | undefined {
+    const existing = this.getWorkflow(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    this.db.prepare(
+      `UPDATE workflows
+       SET name=?, description=?, status=?, updated_at=?
+       WHERE id=?`,
+    ).run(
+      updated.name,
+      updated.description ?? null,
+      updated.status,
+      updated.updatedAt,
+      id,
+    );
+    return updated;
+  }
+
+  deleteWorkflow(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM workflows WHERE id = ?').run(id);
+    return result.changes > 0;
   }
 
   // === Projects ===
@@ -113,6 +170,7 @@ export class OpenCLIRepository {
       .run(
         taskRow.id,
         taskRow.projectId,
+        taskRow.workflowId ?? null,
         taskRow.title,
         taskRow.description ?? null,
         taskRow.status,
@@ -160,15 +218,23 @@ export class OpenCLIRepository {
     return rows.map((r) => this.hydrateTask(r));
   }
 
+  listWorkflowTasks(workflowId: string): Task[] {
+    const rows = this.db
+      .prepare('SELECT * FROM tasks WHERE workflow_id = ? ORDER BY priority DESC, created_at ASC')
+      .all(workflowId) as any[];
+    return rows.map((r) => this.hydrateTask(r));
+  }
+
   updateTask(id: string, updates: Partial<Task>): Task | undefined {
     const existing = this.getTask(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     this.db
       .prepare(
-        `UPDATE tasks SET title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, retry_count=?, max_retries=?, updated_at=? WHERE id=?`,
+        `UPDATE tasks SET workflow_id=?, title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, retry_count=?, max_retries=?, updated_at=? WHERE id=?`,
       )
       .run(
+        updated.workflowId ?? null,
         updated.title,
         updated.description ?? null,
         updated.status,
@@ -486,6 +552,18 @@ export class OpenCLIRepository {
 
   // === Mapper helpers ===
 
+  private mapWorkflow(row: any): Workflow {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      description: row.description ?? undefined,
+      status: row.status as WorkflowStatus,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   private mapProject(row: any): Project {
     return {
       id: row.id,
@@ -505,6 +583,7 @@ export class OpenCLIRepository {
     return {
       id: row.id,
       projectId: row.project_id,
+      workflowId: row.workflow_id ?? undefined,
       title: row.title,
       description: row.description ?? undefined,
       status: row.status,
