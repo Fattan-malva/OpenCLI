@@ -147,4 +147,9 @@ export interface AdapterSession {
   endedAt?: string;
   command?: string;
   error?: string;
+  serverUrl?: string;
+  sessionId?: string;
+  activeMode?: string;
+  activeProvider?: string;
+  activeModel?: string;
 }
