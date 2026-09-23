@@ -19,6 +19,8 @@ import {
 } from './lib/data';
 import { api, getToken, setToken } from './lib/api';
 import type {
+  AdapterInfo,
+  AdapterSession,
   AgentConfigs,
   GlobalStatus,
   LogEntry,
@@ -73,6 +75,13 @@ export interface Store {
   saveAgentConfig: (agentId: string, modes: AgentConfigs[string]['modes']) => void;
   updateAgentRoute: (agentId: string, mode: string, field: 'provider' | 'model', value: string) => void;
   submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string }) => void;
+  adapters: AdapterInfo[];
+  loadAdapters: () => Promise<void>;
+  setAdapterActive: (id: string, active: boolean) => Promise<void>;
+  sessions: AdapterSession[];
+  loadSessions: (projectId: string) => Promise<void>;
+  refreshSessions: (projectId: string) => Promise<void>;
+  setSessions: (sessions: AdapterSession[]) => void;
 }
 
 const COLOR_CLASSES: Record<GlobalStatus['color'], string> = {
@@ -136,6 +145,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigs>(
     () => JSON.parse(JSON.stringify(initialAgentConfigs)),
   );
+  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  const [sessions, setSessionsState] = useState<AdapterSession[]>([]);
   const simStarted = useRef(false);
 
   const showPage = (p: PageId) => setPage(p);
@@ -202,11 +213,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loadAdapters = useCallback(async (): Promise<void> => {
+    try {
+      setAdapters(await api.listAdapters());
+    } catch {
+      setAdapters([]);
+    }
+  }, []);
+
+  const setAdapterActive = useCallback(async (id: string, active: boolean): Promise<void> => {
+    const previous = adapters;
+    setAdapters((list) => list.map((a) => (a.id === id ? { ...a, active } : a)));
+    try {
+      await api.setAdapterActive(id, active);
+    } catch {
+      setAdapters(previous);
+    }
+  }, [adapters]);
+
+  const loadSessions = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      setSessions(await api.listSessions(projectId));
+    } catch {
+      setSessions([]);
+    }
+  }, []);
+
+  const refreshSessions = useCallback(async (projectId: string): Promise<void> => {
+    await loadSessions(projectId);
+  }, [loadSessions]);
+
+  const setSessions = useCallback((sessions: AdapterSession[]) => {
+    setSessionsState(sessions);
+  }, []);
+
   const openProject = useCallback((project: ProjectRecord) => {
     setActiveProject(project);
     setScreen('app');
     setPage('workflow');
-  }, []);
+    // Load sessions for the project to show current status
+    loadSessions(project.id).catch(() => undefined);
+  }, [loadSessions]);
+
+  useEffect(() => {
+    if (screen === 'app') {
+      loadAdapters();
+    }
+  }, [screen, loadAdapters]);
 
   const goToProjects = useCallback(() => {
     setActiveProject(null);
@@ -427,6 +480,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     saveAgentConfig,
     updateAgentRoute,
     submitNewTask,
+    adapters,
+    loadAdapters,
+    setAdapterActive,
+    sessions,
+    loadSessions,
+    refreshSessions,
+    setSessions,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

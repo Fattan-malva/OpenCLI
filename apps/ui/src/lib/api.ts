@@ -1,4 +1,11 @@
-import type { FsListResult, ProjectRecord, SystemSettings } from './types';
+import type {
+  AdapterCapabilities,
+  AdapterInfo,
+  AdapterSession,
+  FsListResult,
+  ProjectRecord,
+  SystemSettings,
+} from './types';
 
 const TOKEN_KEY = 'opencli.token';
 
@@ -75,6 +82,50 @@ export const api = {
     return request<{ name: string; path: string; created: boolean }>('/fs/mkdir', {
       method: 'POST',
       body: JSON.stringify({ path: parentPath, name }),
+    });
+  },
+  listAdapters() {
+    return request<AdapterInfo[]>('/adapters');
+  },
+  setAdapterActive(id: string, active: boolean) {
+    return request<{ id: string; active: boolean }>(`/adapters/${encodeURIComponent(id)}/active`, {
+      method: 'POST',
+      body: JSON.stringify({ active }),
+    });
+  },
+  getCapabilities(id: string, force = false) {
+    return request<AdapterCapabilities>(`/adapters/${encodeURIComponent(id)}/capabilities${force ? '?force=1' : ''}`);
+  },
+  saveCapabilities(id: string, patch: { provider?: string; model?: string; mode?: string }) {
+    return request<AdapterCapabilities>(`/adapters/${encodeURIComponent(id)}/capabilities`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    });
+  },
+  startSession(projectId: string, adapterId: string, adapterName?: string) {
+    return request<AdapterSession>(`/projects/${encodeURIComponent(projectId)}/sessions/start`, {
+      method: 'POST',
+      body: JSON.stringify({ adapterId, adapterName }),
+    });
+  },
+  stopSession(projectId: string, adapterId: string) {
+    return request<{ success: boolean }>(`/projects/${encodeURIComponent(projectId)}/sessions/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ adapterId }),
+    });
+  },
+  listSessions(projectId: string) {
+    return request<AdapterSession[]>(`/projects/${encodeURIComponent(projectId)}/sessions`);
+  },
+  startAllSessions(projectId: string) {
+    return request<AdapterSession[]>(`/projects/${encodeURIComponent(projectId)}/sessions/start-all`, {
+      method: 'POST',
+    });
+  },
+  sendRuntimeCommand(projectId: string, adapterId: string, command: string) {
+    return request<{ ok: boolean; output?: string }>(`/projects/${encodeURIComponent(projectId)}/sessions/runtime`, {
+      method: 'POST',
+      body: JSON.stringify({ adapterId, command }),
     });
   },
 };

@@ -52,6 +52,7 @@ import {
   ChevronsUp,
   KeyRound,
   Database,
+  Copy,
 } from 'lucide-react';
 
 const ICONS: Record<string, LucideIcon> = {
@@ -107,6 +108,7 @@ const ICONS: Record<string, LucideIcon> = {
   'chevrons-up': ChevronsUp,
   'key-round': KeyRound,
   database: Database,
+  copy: Copy,
 };
 
 export function Icon({

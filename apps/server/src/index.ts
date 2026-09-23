@@ -11,7 +11,7 @@ import { Scheduler } from '@opencli/scheduler';
 import { GitService } from '@opencli/git';
 import { WorkspaceService } from '@opencli/workspace';
 import { AdapterRegistry } from '@opencli/adapter';
-import { discoverAllAgents, agentFromDetection } from '@opencli/discovery';
+import { discoverAllAgents, agentFromDetection, detectOS } from '@opencli/discovery';
 import { OpenCodeAdapter } from '@opencli/adapter-opencode';
 import { KiloCodeAdapter } from '@opencli/adapter-kilocode';
 import { ClaudeAdapter } from '@opencli/adapter-claude';
@@ -20,6 +20,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { probeCapabilities, writeCapabilityConfig } from './cli.js';
+import { startSession, stopSession, listSessions, getSession, shutdownAll } from './sessions.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -216,7 +218,12 @@ api.post('/fs/mkdir', requireAuth, async (c) => {
 
 // --- Projects ---
 api.get('/projects', (c) => {
-  return c.json(db.listProjects());
+  return c.json(
+    db.listProjects().map((project) => ({
+      ...project,
+      pathExists: existsSync(project.path),
+    })),
+  );
 });
 
 api.post('/projects', async (c) => {
@@ -257,6 +264,166 @@ api.get('/agents/:id', (c) => {
 });
 
 // --- Discovery ---
+const ADAPTER_ACTIVE_KEY = (id: string) => `adapter.active.${id}`;
+
+function getAdapterActive(id: string): boolean {
+  const v = db.getSetting(ADAPTER_ACTIVE_KEY(id));
+  if (v === null || v === undefined) return true;
+  return v === '1';
+}
+
+api.get('/adapters', (c) => {
+  const results = discoverAllAgents();
+  const platform = detectOS().platform;
+  const adapters = results.map(({ definition, result }) => ({
+    id: definition.id,
+    name: definition.name,
+    icon: definition.icon ?? definition.id,
+    homepage: definition.homepage,
+    installed: result.detected,
+    version: result.version ?? undefined,
+    path: result.path ?? undefined,
+    executable: result.executable ?? definition.executables[0],
+    capabilities: definition.capabilities ?? [],
+    installCommands: definition.installCommands?.[platform] ?? [],
+    active: getAdapterActive(definition.id),
+  }));
+  return c.json(adapters);
+});
+
+api.post('/adapters/:id/active', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ active: boolean }>();
+  db.setSetting(ADAPTER_ACTIVE_KEY(id), body?.active ? '1' : '0');
+  return c.json({ id, active: body?.active ?? false });
+});
+
+// --- Adapter capabilities (real CLI probe: modes / providers / models) ---
+api.get('/adapters/:id/capabilities', async (c) => {
+  const id = c.req.param('id');
+  const force = c.req.query('force') === '1';
+  try {
+    const caps = await probeCapabilities(id, force);
+    return c.json(caps);
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? 'probe failed' }, 500);
+  }
+});
+
+api.put('/adapters/:id/capabilities', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ provider?: string; model?: string; mode?: string }>();
+  try {
+    const caps = await writeCapabilityConfig(id, body ?? {});
+    if (!caps) return c.json({ error: 'adapter not installed' }, 404);
+    return c.json(caps);
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? 'write failed' }, 500);
+  }
+});
+
+// --- Adapter sessions (spawn / stop real CLI in project folder) ---
+api.post('/projects/:projectId/sessions/start', async (c) => {
+  const projectId = c.req.param('projectId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  const body = await c.req.json<{ adapterId?: string; adapterName?: string }>().catch(() => ({} as any));
+  const adapterId = body.adapterId;
+  if (!adapterId) return c.json({ error: 'adapterId required' }, 400);
+
+  const installed = discoverAllAgents().some(({ definition, result }) => definition.id === adapterId && result.detected);
+  if (!installed) return c.json({ error: 'Adapter not installed' }, 404);
+
+  console.log(`[Server] Starting session for ${adapterId} in project ${projectId}`);
+  const state = await startSession({
+    projectId,
+    adapterId,
+    adapterName: body.adapterName ?? adapterId,
+    projectPath: project.path,
+  });
+  console.log(`[Server] Session state: ${state.status}, PID: ${state.pid}`);
+
+  await eventBus.emit({
+    type: 'agent.started',
+    agentId: adapterId,
+    projectId,
+    payload: { adapterId, status: state.status, pid: state.pid },
+  });
+  return c.json(state, state.status === 'failed' ? 500 : 200);
+});
+
+api.post('/projects/:projectId/sessions/stop', async (c) => {
+  const projectId = c.req.param('projectId');
+  const body = await c.req.json<{ adapterId?: string }>();
+  if (!body.adapterId) return c.json({ error: 'adapterId required' }, 400);
+
+  console.log(`[Server] Stopping session for ${body.adapterId} in project ${projectId}`);
+  const ok = await stopSession(projectId, body.adapterId);
+  console.log(`[Server] Session stopped: ${ok}`);
+
+  await eventBus.emit({
+    type: 'agent.stopped',
+    agentId: body.adapterId,
+    projectId,
+    payload: { adapterId: body.adapterId },
+  });
+  return c.json({ success: ok });
+});
+
+api.get('/projects/:projectId/sessions', (c) => {
+  return c.json(listSessions(c.req.param('projectId')));
+});
+
+api.get('/projects/:projectId/sessions/:adapterId', (c) => {
+  const session = getSession(c.req.param('projectId'), c.req.param('adapterId'));
+  if (!session) return c.json({ error: 'Session not found' }, 404);
+  return c.json(session);
+});
+
+// Start all installed + active adapters for a project (auto-start on open)
+api.post('/projects/:projectId/sessions/start-all', async (c) => {
+  const projectId = c.req.param('projectId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  const results = [];
+  for (const { definition, result } of discoverAllAgents()) {
+    if (!result.detected || !getAdapterActive(definition.id)) continue;
+    const state = await startSession({
+      projectId,
+      adapterId: definition.id,
+      adapterName: definition.name,
+      projectPath: project.path,
+    });
+    results.push(state);
+  }
+  return c.json(results);
+});
+
+api.post('/projects/:projectId/sessions/runtime', async (c) => {
+  const projectId = c.req.param('projectId');
+  const body = await c.req.json<{ adapterId?: string; command?: string }>();
+  const adapterId = body?.adapterId;
+  const command = body?.command;
+  if (!adapterId || !command) return c.json({ error: 'adapterId and command required' }, 400);
+
+  const { sendRuntimeCommand } = await import('./sessions.js');
+  const result = await sendRuntimeCommand(projectId, adapterId, command);
+  if (!result.ok) return c.json({ error: result.error }, 404);
+  return c.json({ ok: true, output: result.output });
+});
+
+process.on('exit', () => shutdownAll());
+process.on('SIGINT', () => {
+  shutdownAll();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  shutdownAll();
+  process.exit(0);
+});
+
 api.post('/discovery/scan', async (c) => {
   const results = discoverAllAgents();
   const agents = [];

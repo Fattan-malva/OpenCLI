@@ -73,6 +73,7 @@ export interface ProjectRecord {
   id: string;
   name: string;
   path: string;
+  pathExists?: boolean;
   gitRepository?: string;
   defaultAgent?: string;
   defaultMode?: string;
@@ -97,4 +98,53 @@ export interface FsListResult {
   path: string;
   parent: string | null;
   entries: FsEntry[];
+}
+
+export interface AdapterInfo {
+  id: string;
+  name: string;
+  icon: string;
+  homepage?: string;
+  installed: boolean;
+  version?: string;
+  path?: string;
+  executable: string;
+  capabilities: string[];
+  installCommands: string[];
+  active: boolean;
+}
+
+export interface AdapterMode {
+  id: string;
+  name: string;
+}
+
+export interface ModeModelConfig {
+  provider: string;
+  model: string;
+}
+
+export interface AdapterCapabilities {
+  modes: AdapterMode[];
+  providers: string[];
+  models: Record<string, string[]>;
+  modeModels: Record<string, ModeModelConfig>;
+  current: {
+    provider: string;
+    model: string;
+    mode: string;
+  };
+  configPath?: string;
+}
+
+export interface AdapterSession {
+  projectId: string;
+  adapterId: string;
+  adapterName: string;
+  pid: number | null;
+  status: 'starting' | 'running' | 'exited' | 'failed';
+  startedAt: string;
+  endedAt?: string;
+  command?: string;
+  error?: string;
 }
