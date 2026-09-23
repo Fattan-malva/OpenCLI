@@ -288,13 +288,14 @@ export class OpenCLIRepository {
   insertEvent(event: OpenCLIEvent): void {
     this.db
       .prepare(
-        `INSERT INTO events (id, type, project_id, task_id, agent_id, timestamp, payload_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO events (id, type, project_id, workflow_id, task_id, agent_id, timestamp, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
         event.type,
         event.projectId ?? null,
+        event.workflowId ?? null,
         event.taskId ?? null,
         event.agentId ?? null,
         event.timestamp,
@@ -303,7 +304,7 @@ export class OpenCLIRepository {
   }
 
   listEvents(
-    filter: { projectId?: string; taskId?: string; agentId?: string },
+    filter: { projectId?: string; workflowId?: string; taskId?: string; agentId?: string },
     limit = 100,
   ): OpenCLIEvent[] {
     let query = 'SELECT * FROM events WHERE 1=1';
@@ -311,6 +312,10 @@ export class OpenCLIRepository {
     if (filter.projectId) {
       query += ' AND project_id = ?';
       params.push(filter.projectId);
+    }
+    if (filter.workflowId) {
+      query += ' AND workflow_id = ?';
+      params.push(filter.workflowId);
     }
     if (filter.taskId) {
       query += ' AND task_id = ?';
@@ -606,6 +611,7 @@ export class OpenCLIRepository {
       id: row.id,
       type: row.type,
       projectId: row.project_id ?? undefined,
+      workflowId: row.workflow_id ?? undefined,
       taskId: row.task_id ?? undefined,
       agentId: row.agent_id ?? undefined,
       timestamp: row.timestamp,
