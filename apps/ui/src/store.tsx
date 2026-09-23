@@ -266,9 +266,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setWorkflows((prev) => [workflow, ...prev]);
       setActiveWorkflow(workflow);
       setTasks([]);
+      setLogs([]);
       setModal(null);
       const createdTasks = await api.getWorkflowTasks(workflow.id);
       setTasks(createdTasks.map(mapBackendTask));
+      const createdEvents = await api.listEvents(activeProject.id, 200, workflow.id);
+      setLogs(createdEvents.reverse().map((event) => ({
+        time: new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 } as Intl.DateTimeFormatOptions),
+        type: event.type,
+        message: event.payload,
+        agentId: event.agentId,
+        taskId: event.taskId,
+      })));
+
       addLog('workflow.created', `Workflow created: ${workflow.name}`, 'system');
       return true;
     } catch {
