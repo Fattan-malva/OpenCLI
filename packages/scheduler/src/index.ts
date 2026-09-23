@@ -76,6 +76,7 @@ export class Scheduler {
     this.eventBus.emit({
       type: 'task.created',
       taskId: task.id,
+      workflowId: task.workflowId,
       projectId: task.projectId,
       agentId: task.agentId,
       payload: { title: task.title, status: task.status, workflowId: task.workflowId },
@@ -188,6 +189,7 @@ export class Scheduler {
       this.eventBus.emit({
         type: eventType,
         taskId: id,
+        workflowId: task.workflowId,
         projectId: task.projectId,
         agentId: task.agentId,
         payload: { from: oldStatus, to: newStatus, workflowId: task.workflowId },
@@ -234,6 +236,7 @@ export class Scheduler {
       this.eventBus.emit({
         type: 'task.retried',
         taskId: id,
+        workflowId: task.workflowId,
         projectId: task.projectId,
         agentId: task.agentId,
         payload: {
@@ -299,6 +302,7 @@ export class Scheduler {
     this.activeWorkflows.add(workflowId);
     this.eventBus.emit({
       type: 'workflow.started',
+      workflowId,
       payload: { workflowId },
     }).catch(() => undefined);
 
@@ -313,6 +317,7 @@ export class Scheduler {
     }
     this.eventBus.emit({
       type: 'workflow.paused',
+      workflowId,
       payload: { workflowId },
     }).catch(() => undefined);
   }
@@ -324,6 +329,7 @@ export class Scheduler {
     }
     this.eventBus.emit({
       type: 'workflow.resumed',
+      workflowId,
       payload: { workflowId },
     }).catch(() => undefined);
     this.tick().catch(() => undefined);
@@ -338,6 +344,7 @@ export class Scheduler {
     }
     this.eventBus.emit({
       type: 'workflow.cancelled',
+      workflowId,
       payload: { workflowId },
     }).catch(() => undefined);
   }
