@@ -273,4 +273,10 @@ export const api = {
       body: JSON.stringify({ adapterId, command }),
     });
   },
+  sendTaskInput(taskId: string, input: string) {
+    return request<{ ok: boolean; output?: string }>(`/tasks/${encodeURIComponent(taskId)}/input`, {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    });
+  },
 };
