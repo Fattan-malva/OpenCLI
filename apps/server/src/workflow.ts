@@ -128,6 +128,7 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
     deps.eventBus.emit({
       type: 'task.started',
       projectId: project.id,
+      workflowId: task.workflowId,
       taskId: task.id,
       agentId: adapterId,
       payload: {
@@ -190,6 +191,7 @@ export function refreshWorkflow(deps: WorkflowRuntime, workflowId: string): void
       deps.eventBus.emit({
         type: 'workflow.failed',
         projectId: workflow.projectId,
+        workflowId,
         payload: { workflowId },
       }).catch(() => undefined);
     }
@@ -202,6 +204,7 @@ export function refreshWorkflow(deps: WorkflowRuntime, workflowId: string): void
       deps.eventBus.emit({
         type: 'workflow.completed',
         projectId: workflow.projectId,
+        workflowId,
         payload: { workflowId },
       }).catch(() => undefined);
     }
