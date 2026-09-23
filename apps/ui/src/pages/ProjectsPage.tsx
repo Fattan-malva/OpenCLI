@@ -236,7 +236,7 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
   }, []);
 
   const openExisting = async () => {
-    if (!selectedPath || creating) return;
+    if (!selectedPath || selectedPath === '__roots__' || creating) return;
     setCreating(true);
     setError('');
     const fallback = selectedPath.split(/[\\/]/).filter(Boolean).pop() || 'project';
@@ -246,7 +246,7 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
   };
 
   const submit = async () => {
-    if (!selectedPath || !name.trim() || creating) return;
+    if (!selectedPath || selectedPath === '__roots__' || !name.trim() || creating) return;
     setCreating(true);
     setError('');
     try {
@@ -294,7 +294,7 @@ function NewProjectModal({ onClose, onCreate, onOpen }: NewProjectModalProps) {
             <div className="border border-app-border rounded-lg overflow-hidden">
               <div className="flex items-center justify-between gap-2 px-3 py-2 bg-app-bg border-b border-app-border">
                 <span className="font-mono text-xs text-app-info truncate" title={folder?.path === '__roots__' ? (navigator.platform.toLowerCase().includes('win') ? 'This PC' : '/') : folder?.path}>
-                  {folder?.path}
+                  {folder?.path === '__roots__' ? (navigator.platform.toLowerCase().includes('win') ? 'This PC' : '/') : folder?.path}
                 </span>
                 <div className="flex items-center gap-1 shrink-0">
                   {folder?.parent && (
