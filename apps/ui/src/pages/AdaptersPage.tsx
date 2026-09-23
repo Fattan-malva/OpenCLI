@@ -11,7 +11,7 @@ export function AdaptersPage({ active }: { active: boolean }) {
 
   const adapter = installAdapterId ? adapters.find((a) => a.id === installAdapterId) ?? null : null;
 
-  const runningIds = new Set(sessions.filter((s) => s.status === 'running' || s.status === 'starting').map((s) => s.adapterId));
+  const runningIds = new Set(sessions.filter((s) => s.status === 'running').map((s) => s.adapterId));
   const failedByAdapter = Object.fromEntries(
     sessions.filter((s) => s.status === 'failed').map((s) => [s.adapterId, s.error ?? s.command ?? 'Failed to start']),
   );
@@ -32,13 +32,12 @@ export function AdaptersPage({ active }: { active: boolean }) {
       if (!currentActive) {
         // Activation is explicit and persisted so other pages (Models/Providers)
         // can show only adapters selected by the user.
-        await setAdapterActive(id, true);
-
         console.log(`[UI] Starting ${adapter.name}...`);
         const session = await api.startSession(activeProject.id, id, adapter.name);
         console.log('[UI] Session started:', session);
-        if (session.status === 'running' || session.status === 'starting') {
-          showToast('CLI Agent Started', `${session.command ?? adapter.name} running (PID: ${session.pid || 'starting'}).`, 'success');
+        if (session.status === 'running') {
+          await setAdapterActive(id, true);
+          showToast('CLI Agent Started', `${session.command ?? adapter.name} running (PID: ${session.pid || 'unknown'}).`, 'success');
         } else {
           await setAdapterActive(id, false);
           showToast('Start Failed', session.error ?? `${adapter.name} failed to start.`, 'error');
