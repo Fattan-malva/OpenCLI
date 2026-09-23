@@ -268,7 +268,9 @@ const ADAPTER_ACTIVE_KEY = (id: string) => `adapter.active.${id}`;
 
 function getAdapterActive(id: string): boolean {
   const v = db.getSetting(ADAPTER_ACTIVE_KEY(id));
-  if (v === null || v === undefined) return true;
+  // Adapters are opt-in. "Installed" means available on the machine;
+  // "Active" means explicitly enabled by the user for OpenCLI orchestration.
+  if (v === null || v === undefined) return false;
   return v === '1';
 }
 
