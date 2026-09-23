@@ -2,7 +2,7 @@ import type { AgentContext } from '@opencli/adapter';
 import type { OpenCLIRepository } from '@opencli/db';
 import type { EventBus } from '@opencli/events';
 import type { Scheduler } from '@opencli/scheduler';
-import type { AdapterRegistry } from '@opencli/adapter';
+import type { AdapterRegistry, AdapterRouter } from '@opencli/adapter';
 import type { ProcessManager } from '@opencli/runtime';
 import type { GitService } from '@opencli/git';
 import type { WorkspaceService } from '@opencli/workspace';
@@ -13,6 +13,7 @@ export interface WorkflowRuntime {
   eventBus: EventBus;
   scheduler: Scheduler;
   adapterRegistry: AdapterRegistry;
+  adapterRouter: AdapterRouter;
   runtime: ProcessManager;
   gitService: GitService;
   workspaceService: WorkspaceService;
@@ -56,11 +57,23 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
   const project = deps.db.getProject(task.projectId);
   if (!project) return { success: false, error: 'Project not found' };
 
-  const adapterId = task.agentId ?? project.defaultAgent;
-  if (!adapterId) return { success: false, error: 'No adapter/agent assigned to task' };
+  const requestedAdapterId = task.agentId ?? project.defaultAgent;
+  const route = await deps.adapterRouter.resolve({
+    preferredAdapterId: requestedAdapterId,
+    requiredCapabilities: ['coding'],
+  });
 
-  const adapter = deps.adapterRegistry.get(adapterId);
-  if (!adapter) return { success: false, error: `Adapter not registered: ${adapterId}` };
+  if (!route) {
+    return {
+      success: false,
+      error: requestedAdapterId
+        ? `Adapter ${requestedAdapterId} is unavailable/inactive or lacks required capability: coding`
+        : 'No active adapter with required capability: coding',
+    };
+  }
+
+  const adapterId = route.adapterId;
+  const adapter = route.adapter;
 
   const modes = await adapter.getModes();
   const mode = task.modeId ?? project.defaultMode ?? modes.find((item) => item.id === 'build')?.id ?? modes[0]?.id ?? 'build';
