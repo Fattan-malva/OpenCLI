@@ -609,6 +609,32 @@ api.post('/projects/:projectId/sessions/start-all', async (c) => {
   return c.json(results);
 });
 
+api.post('/tasks/:taskId/input', requireAuth, async (c) => {
+  const taskId = c.req.param('taskId');
+  const body = await c.req.json<{ input?: string }>().catch(() => ({} as any));
+  const input = String(body?.input ?? '');
+  if (!input) return c.json({ error: 'input is required' }, 400);
+
+  const task = db.getTask(taskId);
+  if (!task) return c.json({ error: 'Task not found' }, 404);
+
+  const process = runtime
+    .listProcesses()
+    .find((item) => item.taskId === taskId && ['running', 'paused'].includes(item.status));
+  if (!process) return c.json({ error: 'No active runtime process for task' }, 409);
+
+  await runtime.sendInput(process.id, input);
+  await eventBus.emit({
+    type: 'agent.output',
+    projectId: task.projectId,
+    workflowId: task.workflowId,
+    taskId,
+    agentId: process.agentId,
+    payload: { processId: process.id, text: input, stream: 'stdin', interactive: true },
+  });
+  return c.json({ ok: true, output: 'Input sent to adapter runtime' });
+});
+
 api.post('/projects/:projectId/sessions/runtime', async (c) => {
   const projectId = c.req.param('projectId');
   const body = await c.req.json<{ adapterId?: string; command?: string }>();
