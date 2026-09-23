@@ -385,7 +385,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (screen !== 'app' || !activeProject || !getToken()) return;
 
-    const stream = new EventSource(`/api/events/stream?projectId=${encodeURIComponent(activeProject.id)}`);
+    const params = new URLSearchParams({ projectId: activeProject.id });
+    if (activeWorkflow?.id) params.set('workflowId', activeWorkflow.id);
+    const stream = new EventSource(`/api/events/stream?${params.toString()}`);
     let refreshTimer: number | undefined;
     const stateEvents = new Set([
       'workflow.created',
