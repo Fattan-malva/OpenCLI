@@ -76,3 +76,45 @@ export class AdapterRegistry {
 
 // Re-export types for consumers
 export type { Agent, CommandSpec, DetectionResult, HealthResult, Capability, AgentMode, OpenCLIEvent } from '@opencli/domain';
+
+export interface AdapterRouteRequirement {
+  requiredCapabilities?: string[];
+  preferredAdapterId?: string;
+  excludedAdapterIds?: string[];
+}
+
+export interface AdapterRoute {
+  adapterId: string;
+  score: number;
+  matchedCapabilities: string[];
+  adapter: AgentAdapter;
+}
+
+export class AdapterRouter {
+  constructor(
+    private registry: AdapterRegistry,
+    private isActive: (adapterId: string) => boolean = () => true,
+  ) {}
+
+  async resolve(requirement: AdapterRouteRequirement = {}): Promise<AdapterRoute | undefined> {
+    const required = new Set(requirement.requiredCapabilities ?? []);
+    const excluded = new Set(requirement.excludedAdapterIds ?? []);
+    const routes: AdapterRoute[] = [];
+
+    for (const adapter of this.registry.list()) {
+      if (excluded.has(adapter.id()) || !this.isActive(adapter.id())) continue;
+
+      const capabilities = await adapter.getCapabilities();
+      const ids = new Set(capabilities.map((capability) => capability.id));
+      const matchedCapabilities = [...required].filter((id) => ids.has(id));
+      if (matchedCapabilities.length !== required.size) continue;
+
+      let score = matchedCapabilities.length * 100;
+      if (requirement.preferredAdapterId === adapter.id()) score += 1000;
+      routes.push({ adapterId: adapter.id(), score, matchedCapabilities, adapter });
+    }
+
+    routes.sort((a, b) => b.score - a.score || a.adapterId.localeCompare(b.adapterId));
+    return routes[0];
+  }
+}
