@@ -317,7 +317,7 @@ export class Scheduler {
   pauseWorkflow(workflowId: string): void {
     this.activeWorkflows.delete(workflowId);
     for (const task of this.getTasksByWorkflow(workflowId)) {
-      if (task.status === 'ready') this.updateTaskStatus(task.id, 'paused');
+      if (task.status === 'ready' || task.status === 'pending') this.updateTaskStatus(task.id, 'paused');
     }
     this.eventBus.emit({
       type: 'workflow.paused',
