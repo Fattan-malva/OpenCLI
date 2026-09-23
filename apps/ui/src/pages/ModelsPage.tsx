@@ -14,10 +14,7 @@ export function ModelsPage({ active }: { active: boolean }) {
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Record<string, string | null>>({});
 
-  const runningAdapterIds = new Set(
-    sessions.filter((s) => s.status === 'running' || s.status === 'starting').map((s) => s.adapterId),
-  );
-  const activeAdapters = adapters.filter((a) => a.installed && runningAdapterIds.has(a.id));
+  const activeAdapters = adapters.filter((a) => a.installed);
 
   useEffect(() => {
     if (!active || !activeProject) return;
@@ -114,7 +111,7 @@ export function ModelsPage({ active }: { active: boolean }) {
       <div className="h-12 border-b border-app-border flex items-center justify-between px-6 shrink-0 bg-app-bg/50 backdrop-blur">
         <h1 className="font-semibold text-app-textStrong">Agent Model Configuration</h1>
         <span className="text-xs text-app-text border border-app-border px-2 py-0.5 rounded-full bg-app-surface">
-          Running CLI Agents
+          Installed Agents
         </span>
       </div>
       <div className="flex-1 overflow-y-auto p-6">
@@ -151,7 +148,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-medium text-app-textStrong truncate">{adapter.name}</h3>
                       <div className="text-xs text-app-text font-mono truncate">
-                        Active: {activeMode || '—'}
+                        {sessionRunning ? `Active: ${activeMode || '—'}` : 'Session not running'}
                         {activeProvider && activeModel ? ` • ${activeProvider}/${activeModel}` : ''}
                       </div>
                     </div>
@@ -180,7 +177,7 @@ export function ModelsPage({ active }: { active: boolean }) {
                             >
                               <button
                                 type="button"
-                                disabled={isLoading}
+                                disabled={isLoading || !sessionRunning}
                                 onClick={() => activateMode(adapter.id, m.id)}
                                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors disabled:opacity-50 hover:bg-app-hover/50"
                               >
