@@ -112,6 +112,26 @@ const MODE_TTL_MS = 300_000; // agent list is slow — cache modes for 5 min
 /** Internal/utility agents — not user-selectable modes. */
 const INTERNAL_AGENTS = new Set(['compaction', 'summary', 'title', 'explore', 'general', 'explorer']);
 
+/**
+ * Built-in primary agents per adapter. CLI probes only report the configured
+ * default agent, so merge in the full known set instead of falling back to a
+ * generic 'default' mode.
+ */
+const KNOWN_MODES: Record<string, string[]> = {
+  opencode: ['build', 'plan'],
+  kilocode: ['ask', 'code', 'plan', 'debug', 'orchestrator'],
+};
+
+function withKnownModes(adapterId: string, parsed: Mode[]): Mode[] {
+  const seen = new Set(parsed.map((mode) => mode.id));
+  for (const id of KNOWN_MODES[adapterId] ?? []) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    parsed.push({ id, name: id });
+  }
+  return parsed;
+}
+
 function parseAgentList(stdout: string): Mode[] {
   const modes: Mode[] = [];
   const seen = new Set<string>();
@@ -199,7 +219,7 @@ async function probeModes(adapterId: string, force = false): Promise<Mode[]> {
       modes = [{ id: 'default', name: 'default' }];
     } else {
       const res = await runCli([cmd, 'agent', 'list'], 90_000);
-      modes = parseAgentList(res.stdout);
+      modes = withKnownModes(adapterId, parseAgentList(res.stdout));
       if (modes.length === 0) modes = [{ id: 'default', name: 'default' }];
     }
   }

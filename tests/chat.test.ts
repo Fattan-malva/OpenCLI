@@ -217,6 +217,19 @@ describe('cli output formatting', () => {
     expect(formatActivity({ kind: 'status', label: 'busy', status: 'busy' })).toBe('');
     expect(formatActivity({ kind: 'status', label: 'idle', status: 'idle' })).toBe('');
   });
+
+  it('adds a line range from the first diff hunk on file activity', () => {
+    const patch = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -12,4 +12,4 @@ export const a';
+    expect(
+      formatActivity({ kind: 'file', label: 'src/a.ts', detail: patch, status: 'changed' }),
+    ).toBe('✎ modified src/a.ts (lines 12-15)\n');
+    expect(
+      formatActivity({ kind: 'file', label: 'src/b.ts', detail: '@@ -1 +1,3 @@', status: 'changed' }),
+    ).toBe('✎ modified src/b.ts (lines 1-3)\n');
+    expect(formatActivity({ kind: 'file', label: 'src/c.ts', detail: 'no hunks here', status: 'changed' })).toBe(
+      '✎ modified src/c.ts\n',
+    );
+  });
 });
 
 describe('planner', () => {
@@ -410,6 +423,13 @@ describe('chat mentions', () => {
     const result = parseMention('@someone fix the build', ['opencode']);
     expect(result.targetAdapterId).toBeUndefined();
     expect(result.text).toBe('@someone fix the build');
+  });
+
+  it('parses a mention with a mode tag as adapter/mode', () => {
+    const result = parseMention('@opencode/plan fix the build', ['opencode', 'claude']);
+    expect(result.targetAdapterId).toBe('opencode');
+    expect(result.mode).toBe('plan');
+    expect(result.text).toBe('fix the build');
   });
 });
 

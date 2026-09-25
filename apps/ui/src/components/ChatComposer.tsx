@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from '../store';
+import type { KeyboardEvent } from 'react';
+import { ADAPTERS, useStore } from '../store';
 import { Icon } from '../lib/icons';
-import type { ConfirmationPolicy, InteractionMode } from '../lib/types';
+import { api } from '../lib/api';
+import type { AdapterCapabilities, ConfirmationPolicy, InteractionMode } from '../lib/types';
 
 const INTERACTION_MODES: Array<{ id: InteractionMode; label: string; icon: string; hint: string }> = [
   { id: 'ask', label: 'Ask', icon: 'eye', hint: 'same read-only prompt to every running adapter' },
@@ -42,19 +44,77 @@ function ChipControl({
   );
 }
 
+interface ModeEntry {
+  adapterId: string;
+  modeId: string;
+  key: string;
+}
+
 export function ChatComposer() {
-  const { sessions, sendChat, activeThread } = useStore();
+  const { sessions, sendChat, activeThread, activeProject } = useStore();
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [openMenu, setOpenMenu] = useState<'mode' | 'policy' | null>(null);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>('agent');
   const [confirmationPolicy, setConfirmationPolicy] = useState<ConfirmationPolicy>('default');
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [capModes, setCapModes] = useState<Record<string, AdapterCapabilities | null>>({});
 
   const running = useMemo(
     () => sessions.filter((session) => session.status === 'running'),
     [sessions],
   );
+
+  useEffect(() => {
+    if (!activeProject || running.length === 0) {
+      setCapModes({});
+      return;
+    }
+    let cancelled = false;
+    for (const session of running) {
+      api
+        .getProjectAdapterCapabilities(activeProject.id, session.adapterId)
+        .then((caps) => {
+          if (!cancelled) setCapModes((current) => ({ ...current, [session.adapterId]: caps }));
+        })
+        .catch(() => {
+          if (!cancelled) setCapModes((current) => ({ ...current, [session.adapterId]: null }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.id, running.map((session) => session.adapterId).join(',')]);
+
+  const modeEntries = useMemo(() => {
+    const entries: ModeEntry[] = [];
+    for (const session of running) {
+      const caps = capModes[session.adapterId];
+      const modes = caps?.modes ?? [];
+      if (modes.length > 0) {
+        for (const mode of modes) {
+          entries.push({ adapterId: session.adapterId, modeId: mode.id, key: `${session.adapterId}/${mode.id}` });
+        }
+      } else {
+        const fallback = session.activeMode ?? 'build';
+        entries.push({ adapterId: session.adapterId, modeId: fallback, key: `${session.adapterId}/${fallback}` });
+      }
+    }
+    return entries;
+  }, [running, capModes]);
+
+  const matches = useMemo(() => {
+    if (!mention) return [];
+    const query = mention.query.toLowerCase();
+    return modeEntries.filter((entry) => entry.key.toLowerCase().includes(query));
+  }, [mention, modeEntries]);
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mention?.start, matches.length]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -67,6 +127,71 @@ export function ChatComposer() {
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [openMenu]);
 
+  const handleChange = (value: string) => {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? value.length;
+
+    let nextMention: { start: number; query: string } | null = null;
+    const atIndex = value.lastIndexOf('@', caret - 1);
+    if (atIndex >= 0) {
+      const tokenStart = atIndex === 0 || /\s/.test(value[atIndex - 1]);
+      const noGap = !/\s/.test(value.slice(atIndex + 1, caret));
+      if (tokenStart && noGap && caret > atIndex) {
+        nextMention = {
+          start: atIndex,
+          query: value.slice(atIndex + 1, caret),
+        };
+      }
+    }
+    setMention(nextMention);
+    setText(value);
+  };
+
+  const insertMention = (entry: ModeEntry) => {
+    const el = textareaRef.current;
+    if (!el || !mention) return;
+    const before = text.slice(0, mention.start);
+    const after = text.slice(el.selectionStart);
+    const tag = `@${entry.adapterId}/${entry.modeId}`;
+    const next = `${before}${tag} ${after}`;
+    setText(next);
+    const position = before.length + tag.length + 1;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(position, position);
+    });
+    setMention(null);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && matches.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMentionIndex((index) => (index + 1) % matches.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMentionIndex((index) => (index - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        insertMention(matches[mentionIndex % matches.length]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void submit();
+    }
+  };
+
   const submit = async () => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -74,6 +199,7 @@ export function ChatComposer() {
     try {
       await sendChat(trimmed, undefined, undefined, interactionMode, confirmationPolicy);
       setText('');
+      setMention(null);
     } finally {
       setSending(false);
     }
@@ -85,38 +211,63 @@ export function ChatComposer() {
   return (
     <div className="border-t border-app-border bg-app-surface/60 shrink-0">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-3">
-        <div className="flex items-end gap-2">
-          <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void submit();
+        <div className="relative">
+          {mention && matches.length > 0 && (
+            <div className="absolute left-0 bottom-full mb-2 w-72 z-40 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/40 p-1.5 space-y-0.5">
+              <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-app-text">Agents &amp; modes</div>
+              {matches.map((entry, index) => {
+                const meta = ADAPTERS[entry.adapterId] ?? ADAPTERS.system;
+                const selected = index === mentionIndex % matches.length;
+                return (
+                  <button
+                    key={entry.key}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => insertMention(entry)}
+                    onMouseEnter={() => setMentionIndex(index)}
+                    className={`w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                      selected ? 'bg-app-primary/10' : 'hover:bg-app-hover'
+                    }`}
+                  >
+                    <Icon name={meta.icon} className={`w-4 h-4 shrink-0 ${meta.color}`} />
+                    <span className="text-xs text-app-textStrong">{entry.adapterId}</span>
+                    <span className="text-[10px] font-mono text-app-text">/</span>
+                    <span className="text-[10px] font-mono text-app-primary">{entry.modeId}</span>
+                    {selected && <Icon name="check" className="w-3.5 h-3.5 ml-auto shrink-0 text-app-primary" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(event) => handleChange(event.target.value)}
+              onKeyDown={onKeyDown}
+              rows={2}
+              placeholder={
+                running.length === 0
+                  ? 'Start an adapter session on the Adapters page to chat with agents'
+                  : activeThread
+                    ? interactionMode === 'ask'
+                      ? 'Describe a task to run read-only across every running adapter'
+                      : 'Give a task or ask a follow-up. Type @ to hand it to a specific agent.'
+                    : interactionMode === 'ask'
+                      ? 'Describe a task to run read-only across every running adapter'
+                      : 'Describe the task you want the agents to do'
               }
-            }}
-            rows={2}
-            placeholder={
-              running.length === 0
-                ? 'Start an adapter session on the Adapters page to chat with agents'
-                : activeThread
-                  ? interactionMode === 'ask'
-                    ? 'Describe a task to run read-only across every running adapter'
-                    : 'Give a task or ask a follow-up. Mode decides how the adapters cooperate.'
-                  : interactionMode === 'ask'
-                    ? 'Describe a task to run read-only across every running adapter'
-                    : 'Describe the task you want the agents to do'
-            }
-            className="flex-1 resize-none bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
-          />
-          <button
-            onClick={() => void submit()}
-            disabled={!text.trim() || sending}
-            className="px-3.5 py-2 rounded-lg bg-app-primary hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-app-primary text-white transition-colors flex items-center gap-1.5 text-sm font-medium"
-          >
-            <Icon name="send" className="w-4 h-4" />
-            Send
-          </button>
+              className="flex-1 resize-none bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
+            />
+            <button
+              onClick={() => void submit()}
+              disabled={!text.trim() || sending}
+              className="px-3.5 py-2 rounded-lg bg-app-primary hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-app-primary text-white transition-colors flex items-center gap-1.5 text-sm font-medium"
+            >
+              <Icon name="send" className="w-4 h-4" />
+              Send
+            </button>
+          </div>
         </div>
 
         <div ref={boxRef} className="mt-2 flex items-center gap-2 flex-wrap">
@@ -179,13 +330,7 @@ export function ChatComposer() {
               </div>
             )}
           </div>
-
-          <span className="text-[10px] text-app-text">
-            {modeOption.hint} · {policyOption.hint}
-          </span>
         </div>
-
-        <div className="text-[10px] text-app-text mt-1.5">Enter to send, Shift+Enter for a new line.</div>
       </div>
     </div>
   );

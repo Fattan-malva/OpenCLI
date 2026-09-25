@@ -25,6 +25,15 @@ export interface AgentTurnOptions {
   policy?: ConfirmationPolicy;
 }
 
+export function extractPatchRange(detail?: string): string {
+  const match = (detail ?? '').match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/m);
+  if (!match) return '';
+  const start = Number(match[1]);
+  if (!Number.isFinite(start)) return '';
+  const count = match[2] ? Number(match[2]) : NaN;
+  return count > 0 ? ` (lines ${start}-${start + count - 1})` : ` (line ${start})`;
+}
+
 export function formatActivity(activity: ProtocolActivity): string {
   const detail = activity.detail ? ` ${activity.detail}` : '';
   if (activity.kind === 'tool') {
@@ -34,7 +43,8 @@ export function formatActivity(activity: ProtocolActivity): string {
     return `✳ ${activity.label}${detail}\n`;
   }
   if (activity.kind === 'file') {
-    return `✎ ${activity.status === 'changed' ? 'modified' : activity.status ?? 'changed'} ${activity.label}\n`;
+    const action = activity.status === 'changed' ? 'modified' : activity.status ?? 'changed';
+    return `✎ ${action} ${activity.label}${extractPatchRange(activity.detail)}\n`;
   }
   if (activity.kind === 'status') {
     if (activity.status === 'retry') return `↻ retry: ${activity.detail ?? 'provider unavailable'}\n`;

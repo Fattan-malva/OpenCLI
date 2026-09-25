@@ -16,29 +16,161 @@ function agentMeta(agentId?: string) {
   return (agentId && ADAPTERS[agentId]) || ADAPTERS.system;
 }
 
-function lineClass(line: string): string {
-  if (line.startsWith('⏺')) return 'text-sky-300';
-  if (line.startsWith('✳')) return 'text-purple-300/90';
-  if (line.startsWith('✎')) return 'text-amber-300';
-  if (line.startsWith('↻')) return 'text-amber-400/90';
-  if (line.startsWith('✓')) return 'text-emerald-400/90';
-  if (line.startsWith('!')) return 'text-rose-400';
-  if (line.startsWith('⋯')) return 'text-app-text/70';
-  if (line.startsWith('[')) return 'text-amber-300/90';
-  return 'text-app-textStrong';
+type ActivityRow =
+  | { type: 'text'; text: string }
+  | { type: 'tool'; name: string; detail: string }
+  | { type: 'thought'; text: string }
+  | { type: 'file'; file: string; range?: string }
+  | { type: 'retry'; text: string }
+  | { type: 'error'; text: string }
+  | { type: 'approval'; text: string };
+
+function parseActivity(text: string): ActivityRow[] {
+  const rows: ActivityRow[] = [];
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const tool = line.match(/^⏺\s+([^()\s]+)(?:\((.*)\))?$/);
+    if (tool) {
+      rows.push({ type: 'tool', name: tool[1], detail: (tool[2] ?? '').trim() });
+      continue;
+    }
+    const file = line.match(/^✎\s+(?:modified|created|deleted|changed)\s+(.+)$/i);
+    if (file) {
+      const match = file[1].match(/^(.*?)\s+\(lines?\s+(\d+)\s*-\s*(\d+)\)$/);
+      rows.push(
+        match
+          ? { type: 'file', file: match[1], range: `lines ${match[2]}-${match[3]}` }
+          : { type: 'file', file: file[1].replace(/\s+\(line\s+\d+\)$/, '') },
+      );
+      continue;
+    }
+    const thought = line.match(/^✳\s+(?:thinking\s+)?(.*)$/);
+    if (thought) {
+      rows.push({ type: 'thought', text: thought[1] });
+      continue;
+    }
+    if (/^\[allow-all\]/i.test(line)) {
+      rows.push({ type: 'approval', text: line });
+      continue;
+    }
+    if (line.startsWith('↻')) {
+      rows.push({ type: 'retry', text: line.slice(1).trim() });
+      continue;
+    }
+    if (line.startsWith('!')) {
+      rows.push({ type: 'error', text: line.slice(1).trim() });
+      continue;
+    }
+    rows.push({ type: 'text', text: line });
+  }
+  return rows;
 }
 
-function CliOutput({ text }: { text: string }) {
-  const lines = useMemo(() => text.replace(/\r/g, '').split('\n'), [text]);
+function ActivityOutput({ text, streaming }: { text: string; streaming: boolean }) {
+  const rows = useMemo(() => parseActivity(text), [text]);
+  const lastIdx = rows.length - 1;
+
   return (
-    <div className="rounded-lg border border-app-border bg-[#09090b] px-3 py-2 overflow-y-auto max-h-96">
-      {lines.map((line, index) => (
-        <div key={index} className={`font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words ${lineClass(line)}`}>
-          {line || ' '}
+    <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-96">
+      {rows.map((row, index) => {
+        const live = streaming && index === lastIdx;
+        const key = `${row.type}-${index}`;
+
+        if (row.type === 'text') {
+          return (
+            <div key={key} className="text-app-textStrong whitespace-pre-wrap break-words">
+              {row.text}
+              {live && <LiveCursor />}
+            </div>
+          );
+        }
+
+        if (row.type === 'thought') {
+          return (
+            <div key={key} className={`flex items-start gap-1.5 ${live ? 'animate-pulse' : ''}`}>
+              <Icon name="cpu" className="w-3 h-3 mt-[3px] shrink-0 text-purple-300/80" />
+              <span className="text-purple-300/80 uppercase tracking-wide text-[10px] shrink-0">Thought</span>
+              <span className="text-purple-300/90 italic whitespace-pre-wrap break-words min-w-0">{row.text || 'thinking…'}</span>
+            </div>
+          );
+        }
+
+        if (row.type === 'tool') {
+          return (
+            <div key={key} className="flex items-center gap-1.5">
+              <Icon name="terminal" className="w-3 h-3 shrink-0 text-sky-300" />
+              <span className="text-sky-300 font-medium">{row.name}</span>
+              {row.detail && row.detail !== row.name && (
+                <span className="text-app-text/70 truncate min-w-0">{row.detail}</span>
+              )}
+              <span className="ml-auto shrink-0">
+                {live ? (
+                  <Icon name="loader-2" className="w-3 h-3 text-sky-300 animate-spin" />
+                ) : streaming ? (
+                  <Icon name="circle" className="w-2 h-2 text-app-text/50" />
+                ) : (
+                  <Icon name="check-circle-2" className="w-3 h-3 text-emerald-400/80" />
+                )}
+              </span>
+            </div>
+          );
+        }
+
+        if (row.type === 'file') {
+          return (
+            <div key={key} className={`flex items-center gap-1.5 ${live ? 'animate-pulse' : ''}`}>
+              <Icon name="edit-2" className={`w-3 h-3 shrink-0 ${live ? 'text-amber-300' : 'text-amber-300/80'}`} />
+              <span className="text-amber-300 truncate min-w-0">{row.file}</span>
+              {row.range && (
+                <span className="shrink-0 px-1 py-px rounded border border-amber-500/25 bg-amber-500/10 text-amber-300/90 text-[10px]">
+                  {row.range}
+                </span>
+              )}
+            </div>
+          );
+        }
+
+        if (row.type === 'retry') {
+          return (
+            <div key={key} className="flex items-center gap-1.5">
+              <Icon name="refresh-cw" className="w-3 h-3 shrink-0 text-amber-400/90" />
+              <span className="text-amber-400/90 whitespace-pre-wrap break-words">{row.text}</span>
+            </div>
+          );
+        }
+
+        if (row.type === 'error') {
+          return (
+            <div key={key} className="flex items-start gap-1.5">
+              <Icon name="alert-circle" className="w-3 h-3 mt-[3px] shrink-0 text-rose-400" />
+              <span className="text-rose-400 whitespace-pre-wrap break-words min-w-0">{row.text}</span>
+            </div>
+          );
+        }
+
+        return (
+          <div key={key} className="pl-[18px] -indent-[18px]">
+            <span className="inline-flex items-center gap-1.5 px-1.5 py-px rounded border border-sky-500/20 bg-sky-500/10 text-sky-300/90">
+              <Icon name="check" className="w-2.5 h-2.5" />
+              <span className="whitespace-pre-wrap break-words">{row.text}</span>
+            </span>
+          </div>
+        );
+      })}
+      {streaming && rows.length === 0 && (
+        <div className="flex items-center gap-2 text-app-text">
+          <Icon name="loader-2" className="w-3 h-3 animate-spin" />
+          Working…
         </div>
-      ))}
+      )}
     </div>
   );
+}
+
+function LiveCursor() {
+  return <span className="inline-block w-1 h-3 ml-px align-middle bg-emerald-400 animate-pulse" />;
 }
 
 function MessageActions({ agentId }: { agentId?: string }) {
@@ -157,7 +289,7 @@ function AgentMessage({ message }: { message: ChatMessage }) {
 
         {message.text && (
           <div className="mt-2">
-            <CliOutput text={message.text} />
+            <ActivityOutput text={message.text} streaming={message.status === 'streaming'} />
           </div>
         )}
 

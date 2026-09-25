@@ -13,9 +13,9 @@ export interface ChatDeps extends ChatRuntimeDeps {
   workflowRuntime: WorkflowRuntime;
 }
 
-const MENTION_PATTERN = /@([a-z0-9_-]+)/i;
+const MENTION_PATTERN = /@([a-z0-9_-]+)(?:\/([a-z0-9_-]+))?/i;
 
-export function parseMention(text: string, knownAdapterIds: string[]): { targetAdapterId?: string; text: string } {
+export function parseMention(text: string, knownAdapterIds: string[]): { targetAdapterId?: string; mode?: string; text: string } {
   const match = text.match(MENTION_PATTERN);
   if (!match) return { text };
 
@@ -24,7 +24,8 @@ export function parseMention(text: string, knownAdapterIds: string[]): { targetA
     ?? knownAdapterIds.find((id) => id.toLowerCase().startsWith(mentioned));
   if (!target) return { text };
 
-  return { targetAdapterId: target, text: text.replace(MENTION_PATTERN, '').trim() };
+  const mode = match[2] ? match[2].toLowerCase() : undefined;
+  return { targetAdapterId: target, mode, text: text.replace(MENTION_PATTERN, '').trim() };
 }
 
 function threadTitle(text: string): string {
@@ -330,7 +331,7 @@ function prepareMessage(deps: ChatDeps, options: SendChatOptions): PreparedMessa
 
   const running = runningAgents(options.projectId);
   const mention = options.targetAdapterId
-    ? { targetAdapterId: options.targetAdapterId, text: options.text.trim() }
+    ? { targetAdapterId: options.targetAdapterId, mode: options.mode, text: options.text.trim() }
     : parseMention(options.text, running);
 
   const prompt = mention.text.trim();
@@ -344,7 +345,7 @@ function prepareMessage(deps: ChatDeps, options: SendChatOptions): PreparedMessa
     thread,
     prompt,
     targetAdapterId: mention.targetAdapterId,
-    mode: options.mode,
+    mode: mention.mode,
     interactionMode: resolvedInteractionMode(options.interactionMode),
     confirmationPolicy: resolvedConfirmationPolicy(options.confirmationPolicy),
   };
