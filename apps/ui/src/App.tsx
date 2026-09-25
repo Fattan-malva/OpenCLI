@@ -3,7 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { RightPanel } from './components/RightPanel';
 import { Modal } from './components/Modal';
 import { Toasts } from './components/Toasts';
-import { WorkflowPage } from './pages/WorkflowPage';
+import { WorkspacePage } from './pages/WorkspacePage';
 import { AdaptersPage } from './pages/AdaptersPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { WorkspacesPage } from './pages/WorkspacesPage';
@@ -20,7 +20,7 @@ function Shell() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 flex flex-col bg-app-bg min-w-0 relative">
-          <WorkflowPage active={page === 'workflow'} />
+          <WorkspacePage active={page === 'workspace'} />
           <AdaptersPage active={page === 'adapters'} />
           <ModelsPage active={page === 'models'} />
           <WorkspacesPage active={page === 'workspaces'} />

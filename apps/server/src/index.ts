@@ -23,6 +23,17 @@ import { homedir } from 'node:os';
 import { probeCapabilities } from './cli.js';
 import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes, stopAll as stopAllProjectSessions } from './sessions.js';
 import { configureWorkflowRuntime, refreshWorkflow, restoreRunningWorkflows } from './workflow.js';
+import {
+  acceptChatMessage,
+  createThread,
+  deleteThread,
+  executeChatPlan,
+  listMessages,
+  listThreads,
+  stopThread,
+  type ChatDeps,
+} from './chat.js';
+import { sanitizeConfirmationPolicy, sanitizeInteractionMode, sanitizeSettingsPatch } from './settings.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -43,7 +54,7 @@ eventBus.on('*', (event) => {
 const config = new InMemoryConfigStore();
 const permissions = new PermissionEvaluator();
 const runtime = new ProcessManager(eventBus);
-const scheduler = new Scheduler(eventBus, { maxConcurrent: 4 });
+const scheduler = new Scheduler(eventBus, { maxConcurrent: 8 });
 const gitService = new GitService(eventBus);
 const workspaceService = new WorkspaceService(eventBus);
 const adapterRegistry = new AdapterRegistry();
@@ -175,6 +186,8 @@ const workflowRuntime = {
 configureWorkflowRuntime(workflowRuntime);
 restoreRunningWorkflows(workflowRuntime);
 
+const chatDeps: ChatDeps = { db, eventBus, scheduler, workflowRuntime };
+
 for (const project of db.listProjects()) {
   scheduler.loadTasks(db.listTasks(project.id));
 }
@@ -240,8 +253,9 @@ api.post('/auth/change-pin', requireAuth, async (c) => {
 api.get('/settings', requireAuth, (c) => c.json(getSystemSettings()));
 
 api.put('/settings', requireAuth, async (c) => {
-  const body = await c.req.json();
-  const merged = { ...getSystemSettings(), ...(body ?? {}) };
+  const body = await c.req.json<Record<string, unknown>>();
+  const patch = sanitizeSettingsPatch(body ?? {});
+  const merged = { ...getSystemSettings(), ...patch };
   db.setSetting('system.settings', JSON.stringify(merged));
   return c.json({ success: true, settings: merged });
 });
@@ -486,7 +500,7 @@ api.put('/projects/:projectId/model-routing/:agentId/:modeId', async (c) => {
     let applied = false;
     let applyError: string | undefined;
 
-    if (session?.status === 'running' && session.activeMode === modeId) {
+    if (session?.status === 'running' || session?.status === 'starting') {
       const result = await setSessionModel(projectId, agentId, provider, model);
       applied = result.ok;
       if (!result.ok) applyError = result.error;
@@ -692,6 +706,101 @@ api.post('/discovery/scan', async (c) => {
     }
   }
   return c.json({ agents });
+});
+
+// --- Chat (agent conversation) ---
+api.get('/projects/:projectId/chat', (c) => {
+  return c.json(listThreads(chatDeps, c.req.param('projectId')));
+});
+
+api.post('/projects/:projectId/chat', async (c) => {
+  const projectId = c.req.param('projectId');
+  const project = db.getProject(projectId);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  const body = await c.req.json<{ title?: string; text?: string; adapterId?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
+  const title = String(body?.title ?? body?.text ?? 'New Chat').trim() || 'New Chat';
+  const thread = createThread(chatDeps, projectId, title);
+
+  const text = String(body?.text ?? '').trim();
+  if (text) {
+    const result = acceptChatMessage(chatDeps, {
+      projectId,
+      threadId: thread.id,
+      text,
+      targetAdapterId: body?.adapterId,
+      mode: body?.mode,
+      interactionMode: sanitizeInteractionMode(body?.interactionMode),
+      confirmationPolicy: sanitizeConfirmationPolicy(body?.confirmationPolicy),
+    });
+    return c.json(result, 201);
+  }
+
+  return c.json({ thread, messages: [] }, 201);
+});
+
+api.get('/projects/:projectId/chat/:threadId/messages', (c) => {
+  const thread = db.getChatThread(c.req.param('threadId'));
+  if (!thread || thread.projectId !== c.req.param('projectId')) {
+    return c.json({ error: 'Chat thread not found' }, 404);
+  }
+  return c.json(listMessages(chatDeps, thread.id));
+});
+
+api.post('/projects/:projectId/chat/:threadId/messages', async (c) => {
+  const projectId = c.req.param('projectId');
+  const threadId = c.req.param('threadId');
+  const thread = db.getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
+
+  const body = await c.req.json<{ text?: string; adapterId?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
+  const text = String(body?.text ?? '').trim();
+  if (!text) return c.json({ error: 'text is required' }, 400);
+
+  try {
+    return c.json(acceptChatMessage(chatDeps, {
+      projectId,
+      threadId,
+      text,
+      targetAdapterId: body?.adapterId,
+      mode: body?.mode,
+      interactionMode: sanitizeInteractionMode(body?.interactionMode),
+      confirmationPolicy: sanitizeConfirmationPolicy(body?.confirmationPolicy),
+    }));
+  } catch (error: any) {
+    return c.json({ error: error?.message ?? 'Could not send the message' }, 400);
+  }
+});
+
+api.post('/projects/:projectId/chat/:threadId/execute', async (c) => {
+  const projectId = c.req.param('projectId');
+  const threadId = c.req.param('threadId');
+  const thread = db.getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
+
+  try {
+    return c.json(await executeChatPlan(chatDeps, threadId));
+  } catch (error: any) {
+    return c.json({ error: error?.message ?? 'Could not execute the plan' }, 400);
+  }
+});
+
+api.post('/projects/:projectId/chat/:threadId/stop', (c) => {
+  const projectId = c.req.param('projectId');
+  const threadId = c.req.param('threadId');
+  const thread = db.getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
+
+  const result = stopThread(chatDeps, threadId);
+  return c.json({ success: result.stopped, workflowId: result.workflowId });
+});
+
+api.delete('/projects/:projectId/chat/:threadId', (c) => {
+  const projectId = c.req.param('projectId');
+  const threadId = c.req.param('threadId');
+  const thread = db.getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
+  return c.json({ success: deleteThread(chatDeps, threadId) });
 });
 
 // --- Tasks ---

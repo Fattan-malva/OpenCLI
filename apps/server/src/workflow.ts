@@ -7,6 +7,8 @@ import type { ProcessManager } from '@opencli/runtime';
 import type { GitService } from '@opencli/git';
 import type { WorkspaceService } from '@opencli/workspace';
 import type { Task } from '@opencli/domain';
+import { getSession } from './sessions.js';
+import { runAgentTurn } from './chatRuntime.js';
 
 export interface WorkflowRuntime {
   db: OpenCLIRepository;
@@ -54,6 +56,8 @@ function listRunningWorkflows(deps: WorkflowRuntime) {
 }
 
 async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success: boolean; error?: string }> {
+  if (task.kind === 'chat') return executeChatTask(deps, task);
+
   const project = deps.db.getProject(task.projectId);
   if (!project) return { success: false, error: 'Project not found' };
 
@@ -234,6 +238,124 @@ async function executeTask(deps: WorkflowRuntime, task: Task): Promise<{ success
       });
     }
     return { success: false, error: error?.message ?? 'Agent execution failed' };
+  } finally {
+    for (const lock of locks) if (lock) deps.workspaceService.releaseLock(lock.id);
+  }
+}
+
+/**
+ * Cooperation handoff: a todo that depends on other steps receives their
+ * completed outputs in its prompt, so adapters build on each other's work
+ * instead of repeating the same task. This is what makes Agent mode a real
+ * parallel team rather than N adapters working the same prompt.
+ */
+export function buildDependencyContext(deps: WorkflowRuntime, task: Task): string {
+  if (task.dependencies.length === 0) return '';
+
+  const parts: string[] = [];
+  for (const dependencyId of task.dependencies) {
+    const dependency = deps.db.getTask(dependencyId);
+    if (!dependency || dependency.status !== 'completed') continue;
+    const message = deps.db.getChatMessageByTaskId(dependencyId);
+    const text = message?.text?.trim();
+    if (!text || !message) continue;
+    parts.push(`<from ${message.agentId ?? dependency.agentId ?? 'agent'} — ${dependency.title}>`);
+    parts.push(text.slice(-4000));
+  }
+
+  if (parts.length === 0) return '';
+  return `\n\nContext from the steps this todo depends on (build on this output, do not redo it):\n${parts.join('\n')}`;
+}
+
+async function executeChatTask(deps: WorkflowRuntime, task: Task): Promise<{ success: boolean; error?: string }> {
+  const project = deps.db.getProject(task.projectId);
+  if (!project) return { success: false, error: 'Project not found' };
+
+  const chatMessage = deps.db.getChatMessageByTaskId(task.id);
+  const thread = chatMessage ? deps.db.getChatThread(chatMessage.threadId) : undefined;
+  if (!thread || !chatMessage) {
+    return { success: false, error: 'This chat task is no longer linked to a conversation' };
+  }
+
+  const adapterId = task.agentId ?? project.defaultAgent;
+  if (!adapterId) return { success: false, error: 'No agent assigned to this step' };
+
+  const session = getSession(project.id, adapterId);
+  if (!session || session.status !== 'running') {
+    const message = `${adapterId} is not running. Start its session on the Adapters page first.`;
+    deps.eventBus.emit({
+      type: 'agent.permission_requested',
+      projectId: project.id,
+      workflowId: task.workflowId,
+      taskId: task.id,
+      agentId: adapterId,
+      payload: { threadId: thread.id, messageId: chatMessage.id, message },
+    }).catch(() => undefined);
+    return { success: false, error: message };
+  }
+
+  const locks = task.fileScopes.map((resource) =>
+    deps.workspaceService.acquireLock({
+      projectId: project.id,
+      resource,
+      ownerType: 'task',
+      ownerId: task.id,
+      ttlMs: 600_000,
+    }),
+  );
+  if (locks.some((lock) => !lock)) {
+    for (const lock of locks) if (lock) deps.workspaceService.releaseLock(lock.id);
+    return { success: false, error: 'Another agent is already editing these file scopes' };
+  }
+
+  deps.workspaceService.registerFileScope(task.id, task.fileScopes);
+  deps.eventBus.emit({
+    type: 'workspace.created',
+    projectId: project.id,
+    workflowId: task.workflowId,
+    taskId: task.id,
+    agentId: adapterId,
+    payload: { path: project.path, mode: 'shared-session', isolated: false },
+  }).catch(() => undefined);
+
+  const modelRoute = deps.db.listModelRoutings(project.id)[adapterId]?.[task.modeId ?? 'build'];
+  const mode = task.modeId ?? project.defaultMode ?? 'build';
+  const description =
+    (task.description
+      ? `${task.title}\n\n${task.description}\n\nWork only inside the file scopes assigned to this step: ${task.fileScopes.join(', ') || 'none (read only)'}.`
+      : task.title) + buildDependencyContext(deps, task);
+
+  const record = deps.db.createSession({
+    agentId: adapterId,
+    taskId: task.id,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+  });
+
+  try {
+    const result = await runAgentTurn(deps, {
+      projectId: project.id,
+      threadId: thread.id,
+      adapterId,
+      messageId: chatMessage.id,
+      text: description,
+      taskId: task.id,
+      mode,
+      model: modelRoute,
+    });
+
+    deps.db.updateSession(record.id, {
+      status: result.ok ? 'completed' : 'failed',
+      endedAt: new Date().toISOString(),
+    });
+
+    if (!result.ok) {
+      return { success: false, error: result.error ?? 'The agent session did not finish this step' };
+    }
+    return { success: true };
+  } catch (error: any) {
+    deps.db.updateSession(record.id, { status: 'failed', endedAt: new Date().toISOString() });
+    return { success: false, error: error?.message ?? 'Chat task execution failed' };
   } finally {
     for (const lock of locks) if (lock) deps.workspaceService.releaseLock(lock.id);
   }

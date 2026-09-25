@@ -13,6 +13,11 @@ import type {
   OpenCLIEvent,
   Session,
   SessionStatus,
+  ChatThread,
+  ChatMessage,
+  ChatMessageRole,
+  ChatMessageStatus,
+  ChatRequest,
 } from '@opencli/domain';
 
 export interface DBConfig {
@@ -165,8 +170,8 @@ export class OpenCLIRepository {
     const taskRow: Task = { ...task, id: randomUUID(), createdAt: now, updatedAt: now };
     this.db
       .prepare(
-        `INSERT INTO tasks (id, project_id, workflow_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, retry_count, max_retries, required_capabilities_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, project_id, workflow_id, title, description, status, priority, agent_id, mode_id, model_id, workspace_id, kind, broadcast, retry_count, max_retries, required_capabilities_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         taskRow.id,
@@ -180,6 +185,8 @@ export class OpenCLIRepository {
         taskRow.modeId ?? null,
         taskRow.modelId ?? null,
         taskRow.workspaceId ?? null,
+        taskRow.kind ?? 'manual',
+        taskRow.broadcast ? 1 : 0,
         taskRow.retryCount,
         taskRow.maxRetries,
         taskRow.requiredCapabilities ? JSON.stringify(taskRow.requiredCapabilities) : null,
@@ -233,7 +240,7 @@ export class OpenCLIRepository {
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     this.db
       .prepare(
-        `UPDATE tasks SET workflow_id=?, title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, retry_count=?, max_retries=?, required_capabilities_json=?, updated_at=? WHERE id=?`,
+        `UPDATE tasks SET workflow_id=?, title=?, description=?, status=?, priority=?, agent_id=?, mode_id=?, model_id=?, workspace_id=?, kind=?, broadcast=?, retry_count=?, max_retries=?, required_capabilities_json=?, updated_at=? WHERE id=?`,
       )
       .run(
         updated.workflowId ?? null,
@@ -245,6 +252,8 @@ export class OpenCLIRepository {
         updated.modeId ?? null,
         updated.modelId ?? null,
         updated.workspaceId ?? null,
+        updated.kind ?? 'manual',
+        updated.broadcast ? 1 : 0,
         updated.retryCount,
         updated.maxRetries,
         updated.requiredCapabilities ? JSON.stringify(updated.requiredCapabilities) : null,
@@ -567,6 +576,144 @@ export class OpenCLIRepository {
     return Object.fromEntries(rows.map((r) => [r.key, r.value]));
   }
 
+  // === Chat threads & messages ===
+
+  createChatThread(thread: Omit<ChatThread, 'id' | 'createdAt' | 'updatedAt'>): ChatThread {
+    const now = new Date().toISOString();
+    const row: ChatThread = { ...thread, id: randomUUID(), createdAt: now, updatedAt: now };
+    this.db
+      .prepare(
+        `INSERT INTO chat_threads (id, project_id, title, workflow_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(row.id, row.projectId, row.title, row.workflowId ?? null, row.createdAt, row.updatedAt);
+    return row;
+  }
+
+  getChatThread(id: string): ChatThread | undefined {
+    const row = this.db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(id) as any;
+    return row ? this.mapChatThread(row) : undefined;
+  }
+
+  listChatThreads(projectId: string): ChatThread[] {
+    const rows = this.db
+      .prepare('SELECT * FROM chat_threads WHERE project_id = ? ORDER BY updated_at DESC')
+      .all(projectId) as any[];
+    return rows.map((row) => this.mapChatThread(row));
+  }
+
+  updateChatThread(id: string, updates: Partial<ChatThread>): ChatThread | undefined {
+    const existing = this.getChatThread(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    this.db
+      .prepare('UPDATE chat_threads SET title=?, workflow_id=?, updated_at=? WHERE id=?')
+      .run(updated.title, updated.workflowId ?? null, updated.updatedAt, id);
+    return updated;
+  }
+
+  deleteChatThread(id: string): boolean {
+    return this.db.prepare('DELETE FROM chat_threads WHERE id = ?').run(id).changes > 0;
+  }
+
+  createChatMessage(message: Omit<ChatMessage, 'id' | 'createdAt' | 'updatedAt'>): ChatMessage {
+    const now = new Date().toISOString();
+    const row: ChatMessage = { ...message, id: randomUUID(), createdAt: now, updatedAt: now };
+    this.db
+      .prepare(
+        `INSERT INTO chat_messages (id, thread_id, role, agent_id, task_id, text, status, request_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.threadId,
+        row.role,
+        row.agentId ?? null,
+        row.taskId ?? null,
+        row.text,
+        row.status,
+        row.request ? JSON.stringify(row.request) : null,
+        row.createdAt,
+        row.updatedAt,
+      );
+    this.touchThread(row.threadId);
+    return row;
+  }
+
+  getChatMessage(id: string): ChatMessage | undefined {
+    const row = this.db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(id) as any;
+    return row ? this.mapChatMessage(row) : undefined;
+  }
+
+  listChatMessages(threadId: string, limit = 500): ChatMessage[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?',
+      )
+      .all(threadId, limit) as any[];
+    return rows.map((row) => this.mapChatMessage(row));
+  }
+
+  /** Append streamed agent output without rewriting the whole row. */
+  appendChatMessageText(id: string, chunk: string): ChatMessage | undefined {
+    const existing = this.getChatMessage(id);
+    if (!existing) return undefined;
+    const text = `${existing.text}${chunk}`.slice(-200_000);
+    this.db
+      .prepare('UPDATE chat_messages SET text=?, status=?, updated_at=? WHERE id=?')
+      .run(text, 'streaming', new Date().toISOString(), id);
+    this.touchThread(existing.threadId);
+    return this.getChatMessage(id);
+  }
+
+  updateChatMessage(id: string, updates: Partial<ChatMessage>): ChatMessage | undefined {
+    const existing = this.getChatMessage(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    this.db
+      .prepare(
+        'UPDATE chat_messages SET role=?, agent_id=?, task_id=?, text=?, status=?, request_json=?, updated_at=? WHERE id=?',
+      )
+      .run(
+        updated.role,
+        updated.agentId ?? null,
+        updated.taskId ?? null,
+        updated.text,
+        updated.status,
+        updated.request ? JSON.stringify(updated.request) : null,
+        updated.updatedAt,
+        id,
+      );
+    this.touchThread(existing.threadId);
+    return updated;
+  }
+
+  getChatMessageByTaskId(taskId: string): ChatMessage | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM chat_messages WHERE task_id = ? ORDER BY created_at ASC LIMIT 1')
+      .get(taskId) as any;
+    return row ? this.mapChatMessage(row) : undefined;
+  }
+
+  mergeChatMessageMeta(id: string, meta: NonNullable<ChatMessage['meta']>): ChatMessage | undefined {
+    const existing = this.getChatMessage(id);
+    if (!existing) return undefined;
+    const merged: NonNullable<ChatMessage['meta']> = { ...existing.meta };
+    for (const [key, value] of Object.entries(meta)) {
+      if (value) (merged as Record<string, string>)[key] = value;
+    }
+    this.db
+      .prepare('UPDATE chat_messages SET meta_json=?, updated_at=? WHERE id=?')
+      .run(JSON.stringify(merged), new Date().toISOString(), id);
+    return this.getChatMessage(id);
+  }
+
+  private touchThread(threadId: string): void {
+    this.db
+      .prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), threadId);
+  }
+
   // === Migrations ===
 
   migrate(migrations: Array<{ version: number; sql: string }>): void {
@@ -633,6 +780,8 @@ export class OpenCLIRepository {
       modelId: row.model_id ?? undefined,
       workspaceId: row.workspace_id ?? undefined,
       fileScopes,
+      kind: (row.kind as Task['kind']) ?? 'manual',
+      broadcast: Boolean(row.broadcast),
       requiredCapabilities: row.required_capabilities_json ? JSON.parse(row.required_capabilities_json) : undefined,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
@@ -691,6 +840,33 @@ export class OpenCLIRepository {
       ownerId: row.owner_id,
       expiresAt: row.expires_at ?? undefined,
       createdAt: row.created_at,
+    };
+  }
+
+  private mapChatThread(row: any): ChatThread {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      workflowId: row.workflow_id ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapChatMessage(row: any): ChatMessage {
+    return {
+      id: row.id,
+      threadId: row.thread_id,
+      role: row.role as ChatMessageRole,
+      agentId: row.agent_id ?? undefined,
+      taskId: row.task_id ?? undefined,
+      text: row.text ?? '',
+      status: row.status as ChatMessageStatus,
+      meta: row.meta_json ? (JSON.parse(row.meta_json) as ChatMessage['meta']) : undefined,
+      request: row.request_json ? (JSON.parse(row.request_json) as ChatRequest) : undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
   }
 

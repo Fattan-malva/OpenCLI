@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import type { PageId } from '../lib/types';
 
 const NAV: { id: PageId; label: string; icon: string; count?: string }[] = [
-  { id: 'workflow', label: 'Workflow', icon: 'layout-dashboard' },
+  { id: 'workspace', label: 'WorkSpace', icon: 'layout-dashboard' },
   { id: 'adapters', label: 'Adapters', icon: 'bot', count: '4' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu' },
   { id: 'workspaces', label: 'Workspaces', icon: 'git-merge' },
@@ -30,7 +30,7 @@ export function Sidebar() {
             >
               <Icon
                 name={item.icon}
-                className={`w-5 h-5 mr-3 ${active && item.id === 'workflow' ? 'text-app-primary' : 'group-hover:text-app-textStrong'}`}
+                className={`w-5 h-5 mr-3 ${active && item.id === 'workspace' ? 'text-app-primary' : 'group-hover:text-app-textStrong'}`}
               />
               <span className="hidden sm:block font-medium">{item.label}</span>
               {item.count && (

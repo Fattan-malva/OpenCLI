@@ -1,4 +1,4 @@
-export type PageId = 'workflow' | 'adapters' | 'models' | 'workspaces' | 'settings';
+export type PageId = 'workspace' | 'adapters' | 'models' | 'workspaces' | 'settings';
 export type RightTab = 'todo' | 'logs' | 'context';
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 export type TaskStatus = 'PENDING' | 'READY' | 'RUNNING' | 'PAUSED' | 'ASK' | 'REVIEW' | 'BLOCKED' | 'COMPLETED' | 'FAILED';
@@ -162,6 +162,42 @@ export interface WorkflowRecord {
   name: string;
   description?: string;
   status: 'draft' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChatMessageRole = 'user' | 'planner' | 'agent' | 'system';
+export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'interrupted';
+
+export type InteractionMode = 'ask' | 'plan' | 'agent';
+export type ConfirmationPolicy = 'default' | 'allowAll' | 'autoPilot';
+
+export interface ChatMessageMeta {
+  agent?: string;
+  mode?: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface ChatThread {
+  id: string;
+  projectId: string;
+  title: string;
+  workflowId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  role: ChatMessageRole;
+  agentId?: string;
+  taskId?: string;
+  text: string;
+  status: ChatMessageStatus;
+  meta?: ChatMessageMeta;
+  request?: AdapterRequest;
   createdAt: string;
   updatedAt: string;
 }

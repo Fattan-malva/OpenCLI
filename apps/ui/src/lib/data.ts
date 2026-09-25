@@ -7,6 +7,8 @@ export const ADAPTERS: Record<string, AdapterMeta> = {
   opencode: { name: 'OpenCode', icon: 'terminal', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' },
   aider: { name: 'Aider', icon: 'zap', color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/20' },
   kilo: { name: 'Kilo Agent', icon: 'ghost', color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/20' },
+  kilocode: { name: 'Kilo Code', icon: 'ghost', color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/20' },
+  planner: { name: 'Planner', icon: 'workflow', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' },
 };
 
 export interface StatusMeta {

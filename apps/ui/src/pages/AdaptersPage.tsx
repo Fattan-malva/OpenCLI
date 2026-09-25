@@ -1,49 +1,69 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { Icon } from '../lib/icons';
 import { AdapterIcon } from '../components/AdapterIcon';
 import { api } from '../lib/api';
 
+type PendingAction = 'starting' | 'stopping';
+
 export function AdaptersPage({ active }: { active: boolean }) {
   const { adapters, loadAdapters, sessions, activeProject, showToast, setSessions, setAdapterActive } = useStore();
   const [installAdapterId, setInstallAdapterId] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<Record<string, PendingAction>>({});
+  const pendingRef = useRef<Record<string, PendingAction>>({});
 
   const adapter = installAdapterId ? adapters.find((a) => a.id === installAdapterId) ?? null : null;
 
   const runningIds = new Set(sessions.filter((s) => s.status === 'running').map((s) => s.adapterId));
+  const startingIds = new Set(sessions.filter((s) => s.status === 'starting').map((s) => s.adapterId));
   const failedByAdapter = Object.fromEntries(
     sessions.filter((s) => s.status === 'failed').map((s) => [s.adapterId, s.error ?? s.command ?? 'Failed to start']),
   );
   const projectMissing = activeProject?.pathExists === false;
+
+  const setPending = (id: string, action: PendingAction) => {
+    pendingRef.current[id] = action;
+    setPendingActions({ ...pendingRef.current });
+  };
+
+  const clearPending = (id: string, action: PendingAction) => {
+    if (pendingRef.current[id] !== action) return;
+    delete pendingRef.current[id];
+    setPendingActions({ ...pendingRef.current });
+  };
 
   const toggleActive = async (id: string, currentActive: boolean) => {
     if (!activeProject) {
       showToast('No Project', 'Open a project first to start/stop adapters.', 'warning');
       return;
     }
+    if (pendingRef.current[id]) return;
     const adapter = adapters.find((a) => a.id === id);
     if (!adapter?.installed) {
       showToast('Not Installed', 'Install the adapter before activating it.', 'warning');
       return;
     }
-    setBusyId(id);
+    const action: PendingAction = currentActive ? 'stopping' : 'starting';
+    setPending(id, action);
     try {
       if (!currentActive) {
         // Activation is explicit and persisted so other pages (Models/Providers)
         // can show only adapters selected by the user.
-        console.log(`[UI] Starting ${adapter.name}...`);
         const session = await api.startSession(activeProject.id, id, adapter.name);
-        console.log('[UI] Session started:', session);
-        if (session.status === 'running') {
+        if (session.status === 'running' || session.status === 'starting') {
           await setAdapterActive(id, true);
-          showToast('CLI Agent Started', `${session.command ?? adapter.name} running (PID: ${session.pid || 'unknown'}).`, 'success');
+          showToast(
+            session.status === 'running' ? 'CLI Agent Started' : 'CLI Agent Starting',
+            session.status === 'running'
+              ? `${session.command ?? adapter.name} running (PID: ${session.pid || 'unknown'}).`
+              : `${adapter.name} is still booting and will keep running in the background.`,
+            session.status === 'running' ? 'success' : 'info',
+          );
         } else {
           await setAdapterActive(id, false);
           showToast('Start Failed', session.error ?? `${adapter.name} failed to start.`, 'error');
         }
       } else {
-        console.log(`[UI] Stopping ${adapter.name}...`);
         await api.stopSession(activeProject.id, id);
         await setAdapterActive(id, false);
         showToast('CLI Agent Stopped', `${adapter.name} has been stopped.`, 'info');
@@ -54,10 +74,9 @@ export function AdaptersPage({ active }: { active: boolean }) {
       if (!currentActive) {
         await setAdapterActive(id, false).catch(() => undefined);
       }
-      console.error('[UI] Toggle error:', e);
       showToast('Failed', e?.message ?? 'Unable to change adapter state.', 'error');
     } finally {
-      setBusyId(null);
+      clearPending(id, action);
     }
   };
 
@@ -123,8 +142,11 @@ export function AdaptersPage({ active }: { active: boolean }) {
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {adapters.map((adapter) => {
+                const pendingAction = pendingActions[adapter.id];
                 const isRunning = runningIds.has(adapter.id);
-                const isBusy = busyId === adapter.id;
+                const isStarting = pendingAction === 'starting' || (!pendingAction && startingIds.has(adapter.id));
+                const isStopping = pendingAction === 'stopping';
+                const isBusy = isStarting || isStopping;
                 const failedError = failedByAdapter[adapter.id];
                 const runCmd =
                   adapter.id === 'claude'
@@ -160,7 +182,7 @@ export function AdaptersPage({ active }: { active: boolean }) {
                       </div>
                       {isBusy ? (
                         <span className="flex items-center text-indigo-300 text-xs font-medium bg-indigo-500/10 px-2 py-1 rounded border border-indigo-500/20">
-                          <Icon name="loader-2" className="w-3 h-3 mr-1.5 animate-spin" /> {isRunning ? 'Stopping…' : 'Activating…'}
+                          <Icon name="loader-2" className="w-3 h-3 mr-1.5 animate-spin" /> {isStopping ? 'Stopping…' : 'Activating…'}
                         </span>
                       ) : isRunning ? (
                         <span className="flex items-center text-indigo-400 text-xs font-medium bg-indigo-500/10 px-2 py-1 rounded border border-indigo-500/20">
@@ -217,13 +239,16 @@ export function AdaptersPage({ active }: { active: boolean }) {
                         {adapter.installed ? `Installed${adapter.path ? ` • ${adapter.executable}` : ''}` : 'Not Installed'}
                       </span>
                       <div className="flex items-center gap-2">
-                        <label className="relative inline-flex items-center cursor-pointer" title={isRunning ? 'Deactivate' : 'Activate'}>
+                        <label
+                          className="relative inline-flex items-center cursor-pointer"
+                          title={isRunning || isStarting ? 'Deactivate' : 'Activate'}
+                        >
                           <input
                             type="checkbox"
                             className="sr-only peer"
-                            checked={isRunning}
+                            checked={isRunning || isStarting}
                             disabled={!adapter.installed || isBusy || projectMissing}
-                            onChange={() => toggleActive(adapter.id, isRunning)}
+                            onChange={() => toggleActive(adapter.id, isRunning || isStarting)}
                           />
                           <div className="w-9 h-5 bg-app-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-app-primary"></div>
                         </label>

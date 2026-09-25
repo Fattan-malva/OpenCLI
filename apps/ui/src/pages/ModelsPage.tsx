@@ -8,7 +8,7 @@ import type { AdapterCapabilities } from '../lib/types';
 type RuntimeRouting = Record<string, Record<string, { provider: string; model: string }>>;
 
 export function ModelsPage({ active }: { active: boolean }) {
-  const { adapters, sessions, activeProject, showToast, loadSessions, setSessions } = useStore();
+  const { adapters, sessions, activeProject, showToast, setSessions } = useStore();
   const [caps, setCaps] = useState<Record<string, AdapterCapabilities | null>>({});
   const [routing, setRouting] = useState<RuntimeRouting>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
@@ -55,20 +55,6 @@ export function ModelsPage({ active }: { active: boolean }) {
     }
   };
 
-  const activateMode = async (adapterId: string, modeId: string) => {
-    if (!activeProject) return;
-    setLoading((l) => ({ ...l, [adapterId]: true }));
-    try {
-      await api.setSessionMode(activeProject.id, adapterId, modeId);
-      await loadSessions(activeProject.id);
-      showToast('Mode Switched', `${adapterId} is now using ${modeId}.`, 'success');
-    } catch (e: any) {
-      showToast('Mode Switch Failed', e?.message ?? 'Unable to switch the running session mode.', 'error');
-    } finally {
-      setLoading((l) => ({ ...l, [adapterId]: false }));
-    }
-  };
-
   const applyModelRouting = async (
     adapterId: string,
     modeId: string,
@@ -97,15 +83,23 @@ export function ModelsPage({ active }: { active: boolean }) {
       ));
 
       if (result.applied) {
-        showToast('Model Applied', `${modeId}: ${provider}/${model} is active in the running session.`, 'success');
+        showToast(
+          'Model Applied',
+          `${modeId}: ${provider}/${model} is now used by the running session and every chat turn in that mode.`,
+          'success',
+        );
       } else if (result.applyError) {
         showToast(
           'Routing Saved',
-          `${modeId}: ${provider}/${model} saved. Live session was not changed: ${result.applyError}`,
+          `${modeId}: ${provider}/${model} saved and used by chat turns. Live session switch failed: ${result.applyError}`,
           'warning',
         );
       } else {
-        showToast('Routing Saved', `${modeId}: ${provider}/${model} will be used for that mode.`, 'success');
+        showToast(
+          'Routing Saved',
+          `${modeId}: ${provider}/${model} will be used for that mode in the chat.`,
+          'success',
+        );
       }
     } catch (e: any) {
       showToast('Model Change Failed', e?.message ?? 'Unable to update runtime model routing.', 'error');
@@ -143,7 +137,6 @@ export function ModelsPage({ active }: { active: boolean }) {
               const isLoading = loading[adapter.id];
               const err = error[adapter.id];
               const session = sessions.find((s) => s.adapterId === adapter.id && (s.status === 'running' || s.status === 'starting'));
-              const activeMode = session?.activeMode ?? cap?.current.mode ?? '';
               const activeProvider = session?.activeProvider ?? cap?.current.provider ?? '';
               const activeModel = session?.activeModel ?? cap?.current.model ?? '';
               const sessionRunning = session?.status === 'running' || session?.status === 'starting';
@@ -157,7 +150,9 @@ export function ModelsPage({ active }: { active: boolean }) {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-medium text-app-textStrong truncate">{adapter.name}</h3>
                       <div className="text-xs text-app-text font-mono truncate">
-                        {sessionRunning ? `Active: ${activeMode || '—'}` : 'Session not running'}
+                        {sessionRunning
+                          ? `Modes live: ${(cap?.modes ?? []).map((m) => m.name).join(', ') || 'all'}`
+                          : 'Session not running'}
                         {activeProvider && activeModel ? ` • ${activeProvider}/${activeModel}` : ''}
                       </div>
                     </div>
@@ -176,36 +171,27 @@ export function ModelsPage({ active }: { active: boolean }) {
                       ) : (
                         (cap?.modes ?? []).map((m) => {
                           const modeCfg = routing[adapter.id]?.[m.id] ?? cap?.modeModels?.[m.id] ?? cap?.current ?? { provider: '', model: '' };
-                          const isActive = activeMode === m.id;
                           const modelsForProvider = cap?.models?.[modeCfg.provider] ?? [];
 
                           return (
-                            <div
-                              key={m.id}
-                              className={`${isActive ? 'bg-app-primary/5' : ''}`}
-                            >
-                              <button
-                                type="button"
-                                disabled={isLoading || !sessionRunning}
-                                onClick={() => activateMode(adapter.id, m.id)}
-                                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors disabled:opacity-50 hover:bg-app-hover/50"
-                              >
+                            <div key={m.id}>
+                              <div className="flex items-center gap-3 px-3 py-2.5 text-sm">
                                 <span
-                                  className={`w-3.5 h-3.5 rounded-full border shrink-0 flex items-center justify-center ${
-                                    isActive ? 'border-app-primary' : 'border-app-border'
+                                  className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0 ${
+                                    sessionRunning
+                                      ? 'bg-app-success/15 text-app-success'
+                                      : 'bg-app-border/40 text-app-text'
                                   }`}
                                 >
-                                  {isActive && <span className="w-1.5 h-1.5 rounded-full bg-app-primary" />}
+                                  {sessionRunning ? 'live' : 'standby'}
                                 </span>
-                                <span className={`font-medium ${isActive ? 'text-app-primary' : 'text-app-textStrong'}`}>
-                                  {m.name}
-                                </span>
+                                <span className="font-medium text-app-textStrong">{m.name}</span>
                                 {modeCfg.provider && modeCfg.model && (
                                   <span className="ml-auto text-[11px] font-mono text-app-text truncate max-w-[45%]">
                                     {modeCfg.provider}/{modeCfg.model}
                                   </span>
                                 )}
-                              </button>
+                              </div>
                               <div className="px-3 pb-3 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <div>
                                   <label className="block text-[10px] uppercase tracking-wider text-app-text mb-1 font-semibold">
@@ -258,7 +244,8 @@ export function ModelsPage({ active }: { active: boolean }) {
                       )}
                     </div>
                     <div className="text-[11px] text-app-text/70 mt-3">
-                      Provider/model selection is an OpenCLI runtime override; adapter config remains unchanged.
+                      Provider/model is applied to the running CLI session and used by every chat turn in that mode;
+                      adapter config files stay unchanged.
                     </div>
                   </div>
                 </div>

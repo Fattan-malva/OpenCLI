@@ -84,11 +84,23 @@ export interface Task {
   workspaceId?: string;
   fileScopes: string[];
   requiredCapabilities?: string[];
+  /** manual = created by the user in the kanban UI; chat = created by the planner agent. */
+  kind?: TaskKind;
+  /** True when the same prompt was sent to every running adapter (read-only plan run). */
+  broadcast?: boolean;
   retryCount: number;
   maxRetries: number;
   createdAt: string;
   updatedAt: string;
 }
+
+export type TaskKind = 'manual' | 'chat';
+
+/** How adapters cooperate for a chat prompt (user-driven, not AI-chosen). */
+export type InteractionMode = 'ask' | 'plan' | 'agent';
+
+/** Global confirmation behaviour for permission requests and plan review. */
+export type ConfirmationPolicy = 'default' | 'allowAll' | 'autoPilot';
 
 export type TaskStatus =
   | 'pending'
@@ -174,6 +186,14 @@ export type EventType =
   | 'workflow.completed'
   | 'workflow.failed'
   | 'workflow.cancelled'
+  | 'chat.thread_created'
+  | 'chat.user_message'
+  | 'chat.plan_ready'
+  | 'chat.assistant_started'
+  | 'chat.assistant_output'
+  | 'chat.assistant_completed'
+  | 'chat.assistant_failed'
+  | 'chat.turn_interrupted'
   | 'installation.started'
   | 'installation.completed'
   | 'installation.failed';
@@ -190,6 +210,76 @@ export interface Session {
 }
 
 export type SessionStatus = 'running' | 'paused' | 'completed' | 'failed' | 'crashed';
+
+export interface ChatThread {
+  id: string;
+  projectId: string;
+  title: string;
+  /** Workflow auto-created by the planner for this conversation. */
+  workflowId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChatMessageRole = 'user' | 'planner' | 'agent' | 'system';
+
+export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'interrupted';
+
+export interface ChatMessageMeta {
+  agent?: string;
+  mode?: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  role: ChatMessageRole;
+  /** Adapter id for planner/agent messages. */
+  agentId?: string;
+  /** Workflow task this message belongs to (agent replies). */
+  taskId?: string;
+  text: string;
+  status: ChatMessageStatus;
+  meta?: ChatMessageMeta;
+  /** Permission/question the adapter is waiting on; shown instead of the reply box. */
+  request?: ChatRequest;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Structured request surfaced inside a chat bubble. */
+export interface ChatRequest {
+  type: 'question' | 'permission' | 'choice';
+  message: string;
+  command?: string;
+  options?: string[];
+}
+
+/** Plan step produced by the planner agent. */
+export interface PlanStep {
+  title: string;
+  description?: string;
+  agentId?: string;
+  modeId?: string;
+  fileScopes?: string[];
+  /** Zero-based indexes into the same step list. */
+  dependsOn?: number[];
+}
+
+export interface ExecutionPlan {
+  steps: PlanStep[];
+}
+
+/**
+ * Planner v3 decision: the planner only produces a step (Todo) list. Ask/Plan/Agent
+ * is decided by the user, never by the model.
+ */
+export interface PlannerDecision {
+  steps: PlanStep[];
+  reason?: string;
+}
 
 export interface Artifact {
   id: string;

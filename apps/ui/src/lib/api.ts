@@ -2,7 +2,11 @@ import type {
   AdapterCapabilities,
   AdapterInfo,
   AdapterSession,
+  ChatMessage,
+  ChatThread,
+  ConfirmationPolicy,
   FsListResult,
+  InteractionMode,
   ProjectRecord,
   SystemSettings,
   WorkflowRecord,
@@ -283,5 +287,44 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ input }),
     });
+  },
+
+  listChatThreads(projectId: string) {
+    return request<ChatThread[]>(`/projects/${encodeURIComponent(projectId)}/chat`);
+  },
+  createChatThread(projectId: string, input: { title?: string; text?: string; adapterId?: string; mode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
+    return request<{ thread: ChatThread; messages: ChatMessage[] }>(`/projects/${encodeURIComponent(projectId)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  listChatMessages(projectId: string, threadId: string) {
+    return request<ChatMessage[]>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/messages`,
+    );
+  },
+  sendChatMessage(projectId: string, threadId: string, input: { text: string; adapterId?: string; mode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
+    return request<{ thread: ChatThread; messages: ChatMessage[] }>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/messages`,
+      { method: 'POST', body: JSON.stringify(input) },
+    );
+  },
+  executeChatPlan(projectId: string, threadId: string) {
+    return request<{ started: boolean; workflowId?: string; errors?: string[] }>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/execute`,
+      { method: 'POST' },
+    );
+  },
+  stopChatThread(projectId: string, threadId: string) {
+    return request<{ success: boolean; workflowId?: string }>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/stop`,
+      { method: 'POST' },
+    );
+  },
+  deleteChatThread(projectId: string, threadId: string) {
+    return request<{ success: boolean }>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}`,
+      { method: 'DELETE' },
+    );
   },
 };

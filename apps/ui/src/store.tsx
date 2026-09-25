@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -19,9 +20,14 @@ import {
 import { api, getToken, setToken } from './lib/api';
 import type {
   AdapterInfo,
+  AdapterRequest,
   AdapterSession,
   AdapterConfigs,
+  ChatMessage,
+  ConfirmationPolicy,
+  ChatThread,
   GlobalStatus,
+  InteractionMode,
   LogEntry,
   PageId,
   ProjectRecord,
@@ -89,6 +95,17 @@ export interface Store {
   loadSessions: (projectId: string) => Promise<void>;
   refreshSessions: (projectId: string) => Promise<void>;
   setSessions: (sessions: AdapterSession[]) => void;
+  chatThreads: ChatThread[];
+  activeThread: ChatThread | null;
+  chatMessages: ChatMessage[];
+  chatRequests: Record<string, AdapterRequest>;
+  loadChatThreads: (projectId: string) => Promise<void>;
+  createChat: (input?: { text?: string; title?: string; adapterId?: string; mode?: string }) => Promise<void>;
+  selectChatThread: (threadId: string) => Promise<void>;
+  sendChat: (text: string, adapterId?: string, mode?: string, interactionMode?: InteractionMode, confirmationPolicy?: ConfirmationPolicy) => Promise<void>;
+  stopChat: () => Promise<void>;
+  deleteChatThread: (threadId: string) => Promise<void>;
+  executeChatPlan: () => Promise<void>;
 }
 
 const COLOR_CLASSES: Record<GlobalStatus['color'], string> = {
@@ -172,7 +189,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [screen, setScreen] = useState<AppScreen>('boot');
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
-  const [page, setPage] = useState<PageId>('workflow');
+  const [page, setPage] = useState<PageId>('workspace');
   const [rightTab, setRightTab] = useState<RightTab>('todo');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
@@ -193,12 +210,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [sessions, setSessionsState] = useState<AdapterSession[]>([]);
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatRequests, setChatRequests] = useState<Record<string, AdapterRequest>>({});
+  const loadedThreadRef = useRef<string | null>(null);
 
   const showPage = (p: PageId) => setPage(p);
   const switchRightTab = (t: RightTab) => setRightTab(t);
 
   const addLog = (type: string, message: string | Record<string, unknown>, agentId?: string, taskId?: string) => {
     setLogs((prev) => [...prev, { time: formatLogTime(), type, message, agentId, taskId }]);
+  };
+
+  const dismissToast = (id: number) =>
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+
+  const showToast = (title: string, message: string, type: ToastType = 'info') => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, title, message, type }]);
+    window.setTimeout(() => dismissToast(id), 4000);
   };
 
   const login = useCallback(async (pin: string): Promise<boolean> => {
@@ -239,6 +270,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setWorkflows([]);
     setTasks([]);
     setLogs([]);
+    setChatThreads([]);
+    setChatMessages([]);
+    setActiveThreadId(null);
     setScreen('auth');
   }, [activeProject, stopProjectSessions]);
 
@@ -249,7 +283,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setWorkflows([]);
     setTasks([]);
     setLogs([]);
-    setPage('workflow');
+    setChatThreads([]);
+    setChatMessages([]);
+    setActiveThreadId(null);
+    setPage('workspace');
     setScreen('projects');
   }, [activeProject, stopProjectSessions]);
 
@@ -369,7 +406,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         await loadProjects();
         setActiveProject(project);
         setScreen('app');
-        setPage('workflow');
+        setPage('workspace');
         await loadWorkflows(project.id);
         setAdapters(await api.listAdapters());
         await loadTasks(project.id);
@@ -426,25 +463,137 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSessionsState(sessions);
   }, []);
 
+  const activeThread = useMemo(
+    () => chatThreads.find((thread) => thread.id === activeThreadId) ?? null,
+    [chatThreads, activeThreadId],
+  );
+
+  const loadChatThreads = useCallback(async (projectId: string): Promise<void> => {
+    try {
+      const list = await api.listChatThreads(projectId);
+      setChatThreads(list);
+      setActiveThreadId((current) => {
+        if (current && list.some((thread) => thread.id === current)) return current;
+        return list[0]?.id ?? null;
+      });
+    } catch {
+      setChatThreads([]);
+    }
+  }, []);
+
+  const selectChatThread = useCallback(async (threadId: string): Promise<void> => {
+    loadedThreadRef.current = null;
+    setActiveThreadId(threadId);
+  }, []);
+
+  const createChat = useCallback(async (input?: { text?: string; title?: string; adapterId?: string; mode?: string }): Promise<void> => {
+    if (!activeProject) {
+      showToast('No Project', 'Open a project before starting a conversation.', 'warning');
+      return;
+    }
+    try {
+      const result = await api.createChatThread(activeProject.id, input ?? {});
+      setChatThreads((prev) => [result.thread, ...prev.filter((thread) => thread.id !== result.thread.id)]);
+      loadedThreadRef.current = result.thread.id;
+      setActiveThreadId(result.thread.id);
+      setChatMessages(result.messages);
+      setChatRequests({});
+    } catch (error: any) {
+      showToast('Chat Failed', error?.message ?? 'Unable to start the conversation.', 'error');
+    }
+  }, [activeProject?.id, showToast]);
+
+  const sendChat = useCallback(async (text: string, adapterId?: string, mode?: string, interactionMode?: InteractionMode, confirmationPolicy?: ConfirmationPolicy): Promise<void> => {
+    if (!activeProject) {
+      showToast('No Project', 'Open a project before sending a message.', 'warning');
+      return;
+    }
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    try {
+      if (!activeThreadId) {
+        const created = await api.createChatThread(activeProject.id, { text: trimmed, adapterId, mode, interactionMode, confirmationPolicy });
+        setChatThreads((prev) => [created.thread, ...prev.filter((thread) => thread.id !== created.thread.id)]);
+        loadedThreadRef.current = created.thread.id;
+        setActiveThreadId(created.thread.id);
+        setChatMessages(created.messages);
+        return;
+      }
+      const result = await api.sendChatMessage(activeProject.id, activeThreadId, { text: trimmed, adapterId, mode, interactionMode, confirmationPolicy });
+      setChatThreads((prev) => prev.map((thread) => (thread.id === result.thread.id ? result.thread : thread)));
+      setChatMessages(result.messages);
+    } catch (error: any) {
+      showToast('Message Failed', error?.message ?? 'Unable to send the message.', 'error');
+    }
+  }, [activeProject?.id, activeThreadId, showToast]);
+
+  const stopChat = useCallback(async (): Promise<void> => {
+    if (!activeProject || !activeThreadId) return;
+    try {
+      await api.stopChatThread(activeProject.id, activeThreadId);
+      await Promise.all([loadChatThreads(activeProject.id), loadWorkflows(activeProject.id), loadTasks(activeProject.id)]);
+      showToast('Stopped', 'Pending agent steps were cancelled.', 'info');
+    } catch (error: any) {
+      showToast('Stop Failed', error?.message ?? 'Unable to stop this conversation.', 'error');
+    }
+  }, [activeProject?.id, activeThreadId, loadChatThreads, loadWorkflows, loadTasks, showToast]);
+
+  const deleteChatThread = useCallback(async (threadId: string): Promise<void> => {
+    if (!activeProject) return;
+    try {
+      await api.deleteChatThread(activeProject.id, threadId);
+      const remaining = chatThreads.filter((thread) => thread.id !== threadId);
+      setChatThreads(remaining);
+      if (activeThreadId === threadId) {
+        loadedThreadRef.current = null;
+        setActiveThreadId(remaining[0]?.id ?? null);
+        setChatMessages([]);
+        setChatRequests({});
+      }
+    } catch (error: any) {
+      showToast('Delete Failed', error?.message ?? 'Unable to delete this conversation.', 'error');
+    }
+  }, [activeProject?.id, activeThreadId, chatThreads, showToast]);
+
+  const executeChatPlan = useCallback(async (): Promise<void> => {
+    if (!activeProject || !activeThreadId) return;
+    try {
+      const result = await api.executeChatPlan(activeProject.id, activeThreadId);
+      await Promise.all([loadChatThreads(activeProject.id), loadWorkflows(activeProject.id), loadTasks(activeProject.id)]);
+      if (result.started) {
+        showToast('Executed', 'The plan is now running.', 'success');
+      } else {
+        showToast('Nothing to Execute', result.errors?.join(' ') ?? 'The plan could not be started.', 'warning');
+      }
+    } catch (error: any) {
+      showToast('Execute Failed', error?.message ?? 'Unable to execute the plan.', 'error');
+    }
+  }, [activeProject?.id, activeThreadId, loadChatThreads, loadWorkflows, loadTasks, showToast]);
+
   const openProject = useCallback(async (project: ProjectRecord) => {
     if (activeProject && activeProject.id !== project.id) {
       await stopProjectSessions(activeProject.id);
     }
     setActiveProject(project);
     setScreen('app');
-    setPage('workflow');
+    setPage('workspace');
     setTasks([]);
     setLogs([]);
+    setChatThreads([]);
+    setChatMessages([]);
+    setChatRequests({});
+    loadedThreadRef.current = null;
+    setActiveThreadId(null);
     await loadWorkflows(project.id);
     await loadAdapters();
-    await Promise.all([loadTasks(project.id), loadEvents(project.id), loadSessions(project.id)]);
-  }, [activeProject, stopProjectSessions, loadAdapters, loadSessions, loadTasks, loadWorkflows, loadEvents]);
+    await Promise.all([loadTasks(project.id), loadEvents(project.id), loadSessions(project.id), loadChatThreads(project.id)]);
+  }, [activeProject, stopProjectSessions, loadAdapters, loadSessions, loadTasks, loadWorkflows, loadEvents, loadChatThreads]);
 
   useEffect(() => {
     if (screen !== 'app' || !activeProject || !getToken()) return;
 
     const params = new URLSearchParams({ projectId: activeProject.id });
-    if (activeWorkflow?.id) params.set('workflowId', activeWorkflow.id);
     const stream = new EventSource(`/api/events/stream?${params.toString()}`);
     let refreshTimer: number | undefined;
     const stateEvents = new Set([
@@ -469,6 +618,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       'agent.completed',
       'agent.failed',
       'agent.crashed',
+      'chat.thread_created',
+      'chat.plan_ready',
     ]);
 
     const scheduleRefresh = () => {
@@ -478,8 +629,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           loadWorkflows(activeProject.id),
           loadTasks(activeProject.id),
           loadSessions(activeProject.id),
+          loadChatThreads(activeProject.id),
         ]);
       }, 120);
+    };
+
+    const upsertChatMessage = (
+      threadId: string,
+      message: {
+        id: string;
+        role: ChatMessage['role'];
+        agentId?: string;
+        taskId?: string;
+        text?: string;
+        status: ChatMessage['status'];
+      },
+      patch?: Partial<ChatMessage>,
+    ) => {
+      setChatMessages((prev) => {
+        const index = prev.findIndex((item) => item.id === message.id);
+        if (index === -1) {
+          const now = new Date().toISOString();
+          return [
+            ...prev,
+            {
+              ...patch,
+              id: message.id,
+              threadId,
+              role: message.role,
+              agentId: message.agentId,
+              taskId: message.taskId,
+              text: message.text ?? '',
+              status: message.status,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ];
+        }
+        return prev.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, ...patch } : item,
+        );
+      });
     };
 
     stream.onmessage = (message) => {
@@ -548,6 +738,75 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        const chatThreadId = typeof event.payload?.threadId === 'string' ? event.payload.threadId : undefined;
+        const chatMessageId = typeof event.payload?.messageId === 'string' ? event.payload.messageId : undefined;
+        const chatRole = (event.payload?.role === 'planner' || event.payload?.role === 'system'
+          ? event.payload.role
+          : 'agent') as ChatMessage['role'];
+
+        if (chatThreadId && chatThreadId === activeThreadId) {
+          if (event.type === 'chat.user_message') {
+            const text = typeof event.payload?.text === 'string' ? event.payload.text : '';
+            upsertChatMessage(
+              chatThreadId,
+              { id: chatMessageId!, role: chatRole, text, status: 'complete' },
+            );
+          } else if (!chatMessageId) {
+            // no message to update
+          } else if (event.type === 'chat.assistant_started') {
+            const meta = event.payload?.meta as ChatMessage['meta'] | undefined;
+            upsertChatMessage(
+              chatThreadId,
+              {
+                id: chatMessageId,
+                role: chatRole,
+                agentId: event.agentId,
+                taskId: event.taskId,
+                status: 'pending',
+              },
+              meta ? { meta } : undefined,
+            );
+          } else if (event.type === 'chat.assistant_output') {
+            const chunk = typeof event.payload?.text === 'string' ? event.payload.text : '';
+            const request = event.payload?.request as AdapterRequest | undefined;
+            const meta = event.payload?.meta as ChatMessage['meta'] | undefined;
+            setChatMessages((prev) =>
+              prev.map((item) =>
+                item.id === chatMessageId
+                  ? {
+                      ...item,
+                      status: 'streaming',
+                      text: chunk ? `${item.text}${chunk}`.slice(-200_000) : item.text,
+                      meta: meta ? { ...item.meta, ...meta } : item.meta,
+                    }
+                  : item,
+              ),
+            );
+            if (request) {
+              setChatRequests((prev) => ({ ...prev, [chatMessageId]: request }));
+            }
+            if (event.taskId && chunk) {
+              setTasks((prev) => prev.map((task) =>
+                task.id === event.taskId
+                  ? { ...task, liveOutput: `${task.liveOutput ?? ''}${task.liveOutput ? '\n' : ''}${chunk}`.slice(-20_000) }
+                  : task,
+              ));
+            }
+          } else if (event.type === 'chat.assistant_completed') {
+            setChatMessages((prev) =>
+              prev.map((item) => (item.id === chatMessageId ? { ...item, status: 'complete' } : item)),
+            );
+          } else if (event.type === 'chat.assistant_failed') {
+            setChatMessages((prev) =>
+              prev.map((item) => (item.id === chatMessageId ? { ...item, status: 'error' } : item)),
+            );
+          } else if (event.type === 'chat.turn_interrupted') {
+            setChatMessages((prev) =>
+              prev.map((item) => (item.id === chatMessageId ? { ...item, status: 'interrupted' } : item)),
+            );
+          }
+        }
+
         if (stateEvents.has(event.type ?? '')) scheduleRefresh();
       } catch {
         // Ignore malformed event payloads.
@@ -558,7 +817,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       stream.close();
       if (refreshTimer) window.clearTimeout(refreshTimer);
     };
-  }, [screen, activeProject?.id, activeWorkflow?.id, loadWorkflows, loadTasks, loadSessions]);
+  }, [screen, activeProject?.id, activeThreadId, loadWorkflows, loadTasks, loadSessions, loadChatThreads]);
+
+  useEffect(() => {
+    if (screen !== 'app' || !activeProject || !activeThreadId) return;
+    if (loadedThreadRef.current === activeThreadId) return;
+    loadedThreadRef.current = activeThreadId;
+    void (async () => {
+      try {
+        setChatMessages(await api.listChatMessages(activeProject.id, activeThreadId));
+        setChatRequests({});
+      } catch {
+        setChatMessages([]);
+        setChatRequests({});
+      }
+    })();
+  }, [activeThreadId, activeProject?.id, screen]);
+
+  useEffect(() => {
+    if (screen !== 'app' || !activeProject || !activeWorkflow?.id) return;
+    void loadTasks(activeProject.id);
+  }, [activeWorkflow?.id, screen, activeProject?.id, loadTasks]);
 
   useEffect(() => {
     (async () => {
@@ -593,15 +872,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [logs]);
 
   const clearLogs = () => setLogs([]);
-
-  const dismissToast = (id: number) =>
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-
-  const showToast = (title: string, message: string, type: ToastType = 'info') => {
-    const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, title, message, type }]);
-    window.setTimeout(() => dismissToast(id), 4000);
-  };
 
   const togglePauseAll = useCallback(async (): Promise<void> => {
     if (!activeWorkflow) {
@@ -740,6 +1010,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     loadSessions,
     refreshSessions,
     setSessions,
+    chatThreads,
+    activeThread,
+    chatMessages,
+    chatRequests,
+    loadChatThreads,
+    createChat,
+    selectChatThread,
+    sendChat,
+    stopChat,
+    deleteChatThread,
+    executeChatPlan,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
