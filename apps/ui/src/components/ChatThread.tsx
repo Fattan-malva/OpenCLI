@@ -30,7 +30,7 @@ function agentMeta(agentId?: string) {
  * any more; a message with no items falls back to its prose.
  */
 function TurnItems({ message }: { message: ChatMessage }) {
-  const { answerRequest, chatRequests } = useStore();
+  const { answerRequest } = useStore();
   const streaming = message.status === 'streaming';
   const items = message.items ?? [];
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -62,10 +62,14 @@ function TurnItems({ message }: { message: ChatMessage }) {
     <AnswersProvider
       value={{
         answerRequest,
-        // Only the message that is actually holding a request offers the
-        // controls, so an old question further up the transcript stays readable
-        // instead of looking like something to answer again.
-        answerable: Boolean(chatRequests[message.id]),
+        // Whether this turn can be answered comes from the items themselves, not
+        // from a separate map of open requests. A question that reached the
+        // transcript is answerable, and one that was resolved stops offering
+        // buttons, so the two can never disagree.
+        answerable: items.some(
+          (item) =>
+            (item.kind === 'question' || item.kind === 'permission') && item.status === 'pending',
+        ),
       }}
     >
       <div className="space-y-1.5">
@@ -109,11 +113,13 @@ function AgentMessage({ message }: { message: ChatMessage }) {
 
   return (
     <div className="flex gap-3">
-      <div className={`shrink-0 w-8 h-8 rounded-lg border flex items-center justify-center ${meta.bg} ${meta.border} ${meta.color}`}>
+      {/* The brand mark stands on its own. A tinted card behind it made every
+          message look like an app icon rather than the agent it belongs to. */}
+      <div className="shrink-0 w-8 h-8 flex items-center justify-center">
         {isPlanner ? (
-          <Icon name="workflow" className="w-4 h-4" />
+          <Icon name="workflow" className={`w-4 h-4 ${meta.color}`} />
         ) : (
-          <AdapterIcon id={message.agentId ?? 'system'} className="w-4 h-4" />
+          <AdapterIcon id={message.agentId ?? 'system'} className="w-5 h-5" />
         )}
       </div>
       <div className="min-w-0 flex-1">

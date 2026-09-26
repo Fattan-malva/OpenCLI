@@ -284,8 +284,9 @@ function LivePanel({ adapterId, tasks }: { adapterId: string; tasks: ReturnType<
     <div className="rounded-lg border border-app-border bg-app-surface/70 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-app-border">
         <AdapterIcon id={adapterId} className="w-3.5 h-3.5 shrink-0" />
+        {/* Named once. The raw id used to sit beside the display name, which
+            read as two adapters rather than one described twice. */}
         <span className={`text-xs font-semibold ${meta.color}`}>{meta.name}</span>
-        <span className="text-[10px] font-mono text-app-text">{adapterId}</span>
         <div className="ml-auto flex items-center gap-1">
           <button
             onClick={() => setView('output')}

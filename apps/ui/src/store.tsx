@@ -1000,10 +1000,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               });
             }
             if (items) {
+              // A turn that is waiting on a person is not running, and a spinner
+              // on a question that cannot be answered is exactly the wrong
+              // signal. The items say which it is.
+              const awaiting = items.some(
+                (item) =>
+                  (item.kind === 'question' || item.kind === 'permission') && item.status === 'pending',
+              );
               setChatMessages((prev) =>
                 prev.map((item) =>
                   item.id === chatMessageId
-                    ? { ...item, status: 'streaming', items, ...(text ? { text } : {}) }
+                    ? {
+                        ...item,
+                        status: awaiting ? 'awaiting_input' : 'streaming',
+                        items,
+                        ...(text ? { text } : {}),
+                      }
                     : item,
                 ),
               );

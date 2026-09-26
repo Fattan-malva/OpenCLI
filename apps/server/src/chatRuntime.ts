@@ -35,6 +35,34 @@ export function toolTitle(name: string, title?: string): string {
   return title?.trim() || name || 'tool';
 }
 
+/**
+ * Describes a control request in the shape the answer route and the older
+ * message column both understand.
+ *
+ * The event already carries everything needed, so this is a translation rather
+ * than a lookup: the request lives on the event, and the message column keeps a
+ * copy only so a pending question survives a reload even if the item list is
+ * trimmed.
+ */
+function controlRequestFrom(
+  event: Extract<AgentEvent, { type: 'question' | 'permission' }>,
+): ChatRequest {
+  if (event.type === 'permission') {
+    return {
+      type: 'permission',
+      requestId: event.data.requestId,
+      message: event.data.detail ?? event.data.tool ?? 'The agent needs permission to continue',
+      command: event.data.command,
+    };
+  }
+  return {
+    type: 'question',
+    requestId: event.data.requestId,
+    message: event.data.question,
+    options: event.data.options.map((option) => option.label),
+  };
+}
+
 export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions): Promise<TurnResult> {
   const { projectId, threadId, adapterId, messageId, text, taskId, mode, model } = opts;
   const role = deps.db.getChatMessage(messageId)?.role ?? 'agent';
@@ -169,9 +197,12 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
         commit(next);
         publish(event, next);
 
+        // A control request is described by the event, so it is built here
+        // rather than read back from the message. Reading it back looked
+        // reasonable but nothing had written it yet, so the question reached
+        // the transcript with no way to answer it and the turn just spun.
         if (event.type === 'question' || event.type === 'permission') {
-          const request = deps.db.getChatMessage(messageId)?.request;
-          if (request) handleControl(event.type, request);
+          handleControl(event.type, controlRequestFrom(event));
         }
       },
       onMeta: (meta) => {

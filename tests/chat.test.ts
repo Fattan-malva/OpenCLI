@@ -1055,3 +1055,56 @@ describe('resetting the database', () => {
     expect(repo.getSetting('auth.pin')).toBe('1234');
   });
 });
+
+describe('the agent turn does not repeat the person', () => {
+  it('ignores the text parts that belong to the user message', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+
+    // The runtime announces the person's message first.
+    translator.push({
+      type: 'message.updated',
+      properties: { info: { id: 'msg_user', role: 'user' } },
+    });
+    // Its text part is then streamed like any other, and is not the agent's.
+    const echoed = translator.push({
+      type: 'message.part.updated',
+      properties: { part: { id: 'prt_user', messageID: 'msg_user', type: 'text', text: 'Helooo' } },
+    });
+    expect(echoed).toEqual([]);
+
+    // The agent's own reply is unaffected.
+    translator.push({
+      type: 'message.updated',
+      properties: { info: { id: 'msg_agent', role: 'assistant' } },
+    });
+    const reply = translator.push({
+      type: 'message.part.updated',
+      properties: { part: { id: 'prt_agent', messageID: 'msg_agent', type: 'text', text: 'Hey! What can I help you with?' } },
+    });
+    expect(reply).toHaveLength(1);
+    expect(reply[0].data).toMatchObject({ text: 'Hey! What can I help you with?' });
+
+    const items = applyEvents([], [...echoed, ...reply]);
+    // The prompt is the person's message, not something the agent said.
+    expect(conversationText(items)).toBe('Hey! What can I help you with?');
+  });
+
+  it('does not report the progress markers as content', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    // `step-start` and `step-finish` are the runtime's own bookkeeping. The
+    // message's status already shows progress, so surfacing them only added
+    // "working" and "step finished" lines between the agent's words.
+    expect(
+      translator.push({
+        type: 'message.part.updated',
+        properties: { part: { id: 'prt_s1', type: 'step-start' } },
+      }),
+    ).toEqual([]);
+    expect(
+      translator.push({
+        type: 'message.part.updated',
+        properties: { part: { id: 'prt_s2', type: 'step-finish' } },
+      }),
+    ).toEqual([]);
+  });
+});

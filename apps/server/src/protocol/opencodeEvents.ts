@@ -111,8 +111,27 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
   const factory: EventFactory = createEventFactory(turnId, adapterId);
   /** Part id -> text already reported, so a snapshot yields only its new tail. */
   const seenText = new Map<string, string>();
-  /** Part id -> the assistant message it belongs to, for the first snapshot. */
+  /**
+   * Message id -> the role the server reported for it.
+   *
+   * OpenCode streams the conversation, not just the reply: the person's own
+   * message is published as a text part alongside the agent's. Without this the
+   * prompt came back as something the agent had said, so every turn repeated the
+   * question inside its own answer.
+   */
+  const messageRoles = new Map<string, string>();
   let answered = false;
+
+  /** True when a part is known to belong to the person rather than the agent. */
+  function isUserPart(part: Record<string, unknown>): boolean {
+    if (String(part.role ?? '') === 'user') return true;
+    const messageId = asText(part.messageID) ?? asText(part.messageId);
+    if (!messageId) return false;
+    return messageRoles.get(messageId) === 'user';
+  }
+
+  /** Part id -> whether that part was the person's, so deltas can be filtered too. */
+  const userParts = new Set<string>();
 
   function deltaFromSnapshot(partId: string, text: string): string {
     const previous = seenText.get(partId) ?? '';
@@ -130,7 +149,14 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
   }
 
   function partUpdated(part: Record<string, unknown>): AgentEvent[] {
+    // The person's own words are already shown as their message, so echoing
+    // them into the agent's turn only repeats the prompt.
     const partId = asText(part.id) ?? 'part';
+    if (isUserPart(part)) {
+      userParts.add(partId);
+      return [];
+    }
+
     const partType = String(part.type ?? '');
 
     if (partType === 'text') {
@@ -204,16 +230,10 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
       ];
     }
 
-    if (partType === 'step-start' || partType === 'step-finish') {
-      return [
-        factory.emit({
-          type: 'status',
-          phase: 'update',
-          id: `status:${partId}`,
-          data: { label: partType === 'step-start' ? 'working' : 'step finished' },
-        }),
-      ];
-    }
+    // `step-start` and `step-finish` are the adapter's own progress markers.
+    // They carry no content, and the turn's progress is already shown by the
+    // message's status, so surfacing them only added "working" and
+    // "step finished" lines between the agent's actual words.
 
     if (partType === 'patch' || partType === 'file') {
       const change = fileChangeFrom({ ...part, action: partType === 'patch' ? 'modified' : part.action });
@@ -290,6 +310,9 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
       if (type === 'message.part.delta') {
         const delta = (properties.delta ?? {}) as Record<string, unknown>;
         const partId = asText(properties.partID) ?? asText(properties.partId) ?? 'delta';
+        // A part already identified as the person's stays out of the reply, on
+        // the delta path as well as the snapshot path.
+        if (userParts.has(partId)) return [];
         const text = asText(delta.text) ?? asText(delta.content);
         if (!text) return [];
         // A real delta is already incremental, so nothing is compared against
@@ -305,6 +328,11 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
 
       if (type === 'message.updated') {
         const info = (properties.info ?? {}) as Record<string, unknown>;
+        // The role is recorded for every message, not just the agent's, because
+        // knowing which message is the person's is what lets their own text be
+        // left out of the reply.
+        const messageId = asText(info.id);
+        if (messageId) messageRoles.set(messageId, String(info.role ?? ''));
         if (String(info.role ?? '') !== 'assistant') return [];
         const time = (info.time ?? {}) as Record<string, unknown>;
         const failure = errorMessage(info.error);
