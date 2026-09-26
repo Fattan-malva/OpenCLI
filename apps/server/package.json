@@ -11,19 +11,25 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencli/domain": "*",
-    "@opencli/db": "*",
-    "@opencli/events": "*",
-    "@opencli/config": "*",
-    "@opencli/security": "*",
-    "@opencli/runtime": "*",
-    "@opencli/discovery": "*",
+    "@hono/node-server": "^1.14.0",
     "@opencli/adapter": "*",
-    "@opencli/scheduler": "*",
+    "@opencli/adapter-claude": "*",
+    "@opencli/adapter-kilocode": "*",
+    "@opencli/adapter-opencode": "*",
+    "@opencli/config": "*",
+    "@opencli/db": "*",
+    "@opencli/discovery": "*",
+    "@opencli/domain": "*",
+    "@opencli/events": "*",
     "@opencli/git": "*",
+    "@opencli/runtime": "*",
+    "@opencli/scheduler": "*",
+    "@opencli/security": "*",
+    "@opencli/terminal": "*",
     "@opencli/workspace": "*",
+    "@types/ws": "^8.5.13",
     "hono": "^4.7.0",
-    "@hono/node-server": "^1.14.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"

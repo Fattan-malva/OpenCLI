@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { ADAPTERS, STATUS, useStore } from '../store';
+import { STATUS, useStore } from '../store';
+import { adapterMeta } from '../lib/data';
 import { Icon } from '../lib/icons';
 import { api } from '../lib/api';
 import type { Task } from '../lib/types';
@@ -9,13 +10,7 @@ export function TaskCard({ task }: { task: Task }) {
   const { setTasks, addLog, showToast, updateGlobalStatus } = useStore();
   const [reply, setReply] = useState('');
   const statusInfo = STATUS[task.status];
-  const agentInfo = ADAPTERS[task.agentId] ?? {
-    name: task.agentId || 'Auto-routed adapter',
-    icon: 'terminal',
-    color: 'text-app-text',
-    bg: 'bg-app-border/30',
-    border: 'border-app-border',
-  };
+  const agentInfo = adapterMeta(task.agentId);
 
   const updateTask = (fn: (t: Task) => Task) =>
     setTasks((prev) => prev.map((t) => (t.id === task.id ? fn(t) : t)));

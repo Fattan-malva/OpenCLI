@@ -1,26 +1,36 @@
-// Dynamic CLI probing + config read/write.
-// All executables resolved via PATH scan (findExecutable) and config paths from
-// homedir() so this works on any machine regardless of install location.
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { adapterCommand, detectOS, findExecutable, runExecutable, type Platform } from '@opencli/discovery';
+// Adapter capability resolution, driven entirely by live CLI discovery.
+//
+// There is deliberately no per-adapter knowledge in this file: modes, providers
+// and models all come from `AgentAdapter.discover()`. A CLI that exposes no
+// model catalog (Claude) reports zero models instead of a fabricated list, and a
+// CLI that exposes no mode list reports zero modes.
+import { findExecutable, adapterCommand } from '@opencli/discovery';
+import type { AgentManifest, AgentMode, AgentModel } from '@opencli/domain';
+import { getAdapter, setAdapterExecutable } from './adapters.js';
 
 export interface Mode {
   id: string;
   name: string;
+  type?: 'primary' | 'subagent';
+  description?: string;
+  source?: string;
 }
 
 export interface ModeModelConfig {
   provider: string;
   model: string;
+  /** Exact spec to send back to the CLI, when it differs from provider/model. */
+  spec?: string;
 }
 
 export interface AdapterCapabilities {
+  /** User-selectable primary agents, as reported by the CLI. */
   modes: Mode[];
+  /** Secondary agents the CLI exposes, for orchestration UIs. */
+  subagents: Mode[];
   providers: string[];
   models: Record<string, string[]>;
-  /** Per-agent mode model routing (from config agent.{mode}.model). */
+  /** Per-mode model routing (from the CLI's own config). */
   modeModels: Record<string, ModeModelConfig>;
   current: {
     provider: string;
@@ -28,6 +38,12 @@ export interface AdapterCapabilities {
     mode: string;
   };
   configPath?: string;
+  /** How the data above was obtained, and when. */
+  source?: string;
+  discoveredAt?: string;
+  supportsInteractive?: boolean;
+  /** Non-fatal problems encountered while probing. */
+  warnings?: string[];
 }
 
 function isAdapterInstalled(adapterId: string): boolean {
@@ -37,263 +53,151 @@ function isAdapterInstalled(adapterId: string): boolean {
   return adapterId === 'kilocode' && !!findExecutable('kilocode');
 }
 
-function homeConfigDir(platform: Platform, folder: string): string {
-  if (platform === 'win32') {
-    // On Windows, dot-folder under %USERPROFILE% still works for these CLIs.
-    return join(homedir(), folder);
+/**
+ * Resolve the CLI binary for an adapter.
+ *
+ * PATH resolution only; the adapter's own `discover()` remains authoritative for
+ * config paths and catalogs.
+ */
+function resolveExecutable(adapterId: string): string | undefined {
+  const cmd = adapterCommand(adapterId);
+  if (!cmd) return undefined;
+  const direct = findExecutable(cmd);
+  if (direct) return direct;
+  if (adapterId === 'kilocode') {
+    const alt = findExecutable('kilocode');
+    if (alt) return alt;
   }
-  return join(homedir(), folder);
+  return undefined;
 }
 
-function opencodeConfigPath(): string {
-  const candidates = ['.config/opencode/opencode.json', '.config/opencode/opencode.jsonc'];
-  for (const c of candidates) {
-    const p = join(homedir(), c);
-    if (existsSync(p)) return p;
-  }
-  return join(homedir(), '.config/opencode/opencode.json');
+// --- manifest cache ---
+//
+// Discovery spawns real CLI processes (Kilo's catalog alone takes ~11s), so
+// manifests are cached. The TTL is long because catalogs change rarely; `force`
+// bypasses it when the user explicitly refreshes.
+
+interface CacheEntry<T> {
+  at: number;
+  data: T;
 }
 
-function kiloConfigPath(): string {
-  const candidates = ['.config/kilo/kilo.json', '.config/kilo/kilo.jsonc', '.config/kilo/opencode.json'];
-  for (const c of candidates) {
-    const p = join(homedir(), c);
-    if (existsSync(p)) return p;
-  }
-  return join(homedir(), '.config/kilo/kilo.json');
+const MANIFEST_CACHE = new Map<string, CacheEntry<AgentManifest>>();
+const MANIFEST_TTL_MS = 5 * 60_000;
+
+export function invalidateCapability(adapterId: string): void {
+  MANIFEST_CACHE.delete(adapterId);
 }
 
-function claudeConfigPath(): string {
-  return join(homedir(), '.claude', 'settings.json');
+export function invalidateAllCapabilities(): void {
+  MANIFEST_CACHE.clear();
 }
-
-async function runCli(args: string[], timeoutMs = 20000): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  const result = await runExecutable(args[0], args.slice(1), { timeout: timeoutMs });
-  return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode };
-}
-
-function parseModelLine(line: string): { provider: string; model: string } | null {
-  const t = line.trim();
-  if (!t) return null;
-  // kilo format: "kilo/~anthropic/claude-fable-latest" or "kilo/~openai/model"
-  if (t.startsWith('kilo/')) {
-    const rest = t.slice('kilo/'.length);
-    const idx = rest.indexOf('/');
-    if (idx <= 0) return null;
-    const provider = rest.slice(0, idx);
-    const model = rest.slice(idx + 1);
-    if (!provider || !model) return null;
-    return { provider, model };
-  }
-  // opencode format: "provider/model"
-  const idx = t.indexOf('/');
-  if (idx <= 0) return null;
-  const provider = t.slice(0, idx);
-  const model = t.slice(idx + 1);
-  if (!provider || !model) return null;
-  return { provider, model };
-}
-
-function splitModelSpec(spec: string): { provider: string; model: string } | null {
-  const t = (spec ?? '').trim();
-  if (!t) return null;
-  const idx = t.indexOf('/');
-  if (idx <= 0) return { provider: 'default', model: t };
-  return { provider: t.slice(0, idx), model: t.slice(idx + 1) };
-}
-
-// --- probing ---
-
-const CAPABILITY_CACHE = new Map<string, { at: number; data: AdapterCapabilities }>();
-const CAPABILITY_TTL_MS = 30_000;
-const MODE_CACHE = new Map<string, { at: number; modes: Mode[] }>();
-const MODE_TTL_MS = 300_000; // agent list is slow — cache modes for 5 min
-
-/** Internal/utility agents — not user-selectable modes. */
-const INTERNAL_AGENTS = new Set(['compaction', 'summary', 'title', 'explore', 'general', 'explorer']);
 
 /**
- * Built-in primary agents per adapter. CLI probes only report the configured
- * default agent, so merge in the full known set instead of falling back to a
- * generic 'default' mode.
+ * Live manifest for an adapter, from cache unless forced.
+ *
+ * Returns undefined when the adapter is unknown or its CLI is not installed.
  */
-const KNOWN_MODES: Record<string, string[]> = {
-  opencode: ['build', 'plan'],
-  kilocode: ['ask', 'code', 'plan', 'debug', 'orchestrator'],
-};
-
-function withKnownModes(adapterId: string, parsed: Mode[]): Mode[] {
-  const seen = new Set(parsed.map((mode) => mode.id));
-  for (const id of KNOWN_MODES[adapterId] ?? []) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    parsed.push({ id, name: id });
-  }
-  return parsed;
-}
-
-function parseAgentList(stdout: string): Mode[] {
-  const modes: Mode[] = [];
-  const seen = new Set<string>();
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    const match = rawLine.trim().match(/^([\w.-]+)\s*\((primary|subagent)\)\s*$/);
-    if (!match) continue;
-    const [, name, kind] = match;
-    if (kind !== 'primary') continue;
-    if (INTERNAL_AGENTS.has(name.toLowerCase())) continue;
-    if (seen.has(name)) continue;
-    seen.add(name);
-    modes.push({ id: name, name });
-  }
-  return modes;
-}
-
-function parseClaudePermissionModes(helpText: string): Mode[] {
-  const idx = helpText.indexOf('--permission-mode');
-  if (idx < 0) return [{ id: 'default', name: 'default' }];
-  const slice = helpText.slice(idx, idx + 600);
-  const choicesMatch = slice.match(/choices:\s*([\s\S]*?)\)/);
-  if (!choicesMatch) return [{ id: 'default', name: 'default' }];
-  const modes = [...choicesMatch[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  if (modes.length === 0) return [{ id: 'default', name: 'default' }];
-  return modes.map((m) => ({ id: m, name: m }));
-}
-
-async function probeModelList(adapterId: string): Promise<{ providers: string[]; models: Record<string, string[]> }> {
-  if (adapterId === 'claude') {
-    const providers = ['anthropic'];
-    const models = {
-      anthropic: [
-        'claude-sonnet-4-5',
-        'claude-sonnet-4-1',
-        'claude-opus-4-1',
-        'claude-haiku-4-5',
-        'claude-fable-5',
-        'claude-sonnet-latest',
-        'claude-opus-latest',
-        'claude-haiku-latest',
-        'sonnet',
-        'opus',
-        'haiku',
-      ],
-    };
-    return { providers, models };
-  }
-
-  const cmd = adapterCommand(adapterId);
-  if (!cmd || !isAdapterInstalled(adapterId)) return { providers: [], models: {} };
-  const res = await runCli([cmd, 'models']);
-
-  const providers = new Set<string>();
-  const models: Record<string, string[]> = {};
-  for (const rawLine of res.stdout.split(/\r?\n/)) {
-    const parsed = parseModelLine(rawLine);
-    if (!parsed) continue;
-    providers.add(parsed.provider);
-    (models[parsed.provider] ??= []).push(parsed.model);
-  }
-  if (providers.size === 0) {
-    // Fallback: default set if CLI doesn't support the command.
-    return { providers: ['default'], models: { default: ['auto', 'fast', 'pro'] } };
-  }
-  const order = Array.from(providers);
-  return { providers: order, models };
-}
-
-async function probeModes(adapterId: string, force = false): Promise<Mode[]> {
-  const cached = MODE_CACHE.get(adapterId);
-  if (!force && cached && Date.now() - cached.at < MODE_TTL_MS) return cached.modes;
-
-  let modes: Mode[];
-
-  if (adapterId === 'claude') {
-    if (!isAdapterInstalled('claude')) {
-      modes = [{ id: 'default', name: 'default' }];
-    } else {
-      const res = await runCli(['claude', '--help'], 15_000);
-      modes = parseClaudePermissionModes(res.stdout + res.stderr);
-    }
-  } else {
-    const cmd = adapterCommand(adapterId);
-    if (!cmd || !isAdapterInstalled(adapterId)) {
-      modes = [{ id: 'default', name: 'default' }];
-    } else {
-      const res = await runCli([cmd, 'agent', 'list'], 90_000);
-      modes = withKnownModes(adapterId, parseAgentList(res.stdout));
-      if (modes.length === 0) modes = [{ id: 'default', name: 'default' }];
-    }
-  }
-
-  MODE_CACHE.set(adapterId, { at: Date.now(), modes });
-  return modes;
-}
-
-function readConfigFile(adapterId: string): { path?: string; cfg: Record<string, unknown> } {
-  try {
-    const p =
-      adapterId === 'claude' ? claudeConfigPath() : adapterId === 'opencode' ? opencodeConfigPath() : kiloConfigPath();
-    if (!existsSync(p)) return { cfg: {} };
-    return { path: p, cfg: JSON.parse(readFileSync(p, 'utf-8')) };
-  } catch {
-    return { cfg: {} };
-  }
-}
-
-function readClaudeModel(cfg: Record<string, unknown>): ModeModelConfig {
-  const env = (cfg.env ?? {}) as Record<string, string>;
-  const model =
-    env.ANTHROPIC_DEFAULT_SONNET_MODEL ||
-    env.ANTHROPIC_DEFAULT_OPUS_MODEL ||
-    env.ANTHROPIC_DEFAULT_HAIKU_MODEL ||
-    env.ANTHROPIC_MODEL ||
-    String(cfg.model ?? 'claude-sonnet-4-5');
-  return { provider: 'anthropic', model };
-}
-
-function readModeModelsFromConfig(
+export async function getManifest(
   adapterId: string,
-  modes: Mode[],
-  cfg: Record<string, unknown>,
-): Record<string, ModeModelConfig> {
-  const global =
-    adapterId === 'claude'
-      ? readClaudeModel(cfg)
-      : (splitModelSpec(String(cfg.model ?? '')) ?? { provider: 'default', model: 'auto' });
+  force = false,
+  workspacePath = process.cwd(),
+): Promise<AgentManifest | undefined> {
+  const adapter = getAdapter(adapterId);
+  if (!adapter) return undefined;
 
-  const agents = (cfg.agent ?? {}) as Record<string, { model?: string }>;
+  const cached = MANIFEST_CACHE.get(adapterId);
+  if (!force && cached && Date.now() - cached.at < MANIFEST_TTL_MS) {
+    return cached.data;
+  }
+
+  const executable = resolveExecutable(adapterId);
+  if (!executable) return undefined;
+  setAdapterExecutable(adapterId, executable);
+
+  let manifest: AgentManifest;
+  try {
+    manifest = await adapter.discover({
+      projectPath: workspacePath,
+      workspacePath,
+      environment: {},
+    });
+  } catch (err) {
+    // A failed probe must not take down the route; report it as an empty
+    // manifest so the UI can show the adapter with no data instead of erroring.
+    manifest = {
+      adapter: {
+        id: adapterId,
+        name: adapter.name(),
+        version: '',
+        executable: executable,
+        installed: true,
+      },
+      modes: [],
+      models: [],
+      providers: [],
+      capabilities: [],
+      source: 'none',
+      discoveredAt: new Date().toISOString(),
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  MANIFEST_CACHE.set(adapterId, { at: Date.now(), data: manifest });
+  return manifest;
+}
+
+function toMode(mode: AgentMode): Mode {
+  return {
+    id: mode.id,
+    name: mode.name,
+    type: mode.type ?? 'primary',
+    description: mode.description,
+    source: mode.source,
+  };
+}
+
+/**
+ * Model routing for each mode, taken from the CLI config the adapter read.
+ *
+ * Modes the CLI did not configure are left absent rather than being given an
+ * invented default, so the UI can distinguish "unset" from "set".
+ */
+function modeModelsFrom(manifest: AgentManifest): Record<string, ModeModelConfig> {
   const out: Record<string, ModeModelConfig> = {};
-  for (const mode of modes) {
-    if (adapterId === 'claude') {
-      out[mode.id] = { ...global };
-      continue;
+  const source = manifest.modeModels ?? {};
+  for (const [mode, value] of Object.entries(source)) {
+    out[mode] = { provider: value.provider, model: value.model };
+  }
+  for (const mode of manifest.modes) {
+    if (out[mode.id]) continue;
+    const spec = manifest.current?.mode === mode.id ? manifest.current : undefined;
+    if (spec && spec.model) {
+      out[mode.id] = { provider: spec.provider, model: spec.model };
     }
-    const spec = agents[mode.id]?.model ?? cfg.model;
-    out[mode.id] = splitModelSpec(String(spec ?? '')) ?? { ...global };
   }
   return out;
 }
 
-function readCurrentFromConfig(
-  adapterId: string,
-  modes: Mode[],
-): { provider: string; model: string; mode: string; configPath?: string; modeModels: Record<string, ModeModelConfig> } {
-  const { path, cfg } = readConfigFile(adapterId);
-  const modeModels = readModeModelsFromConfig(adapterId, modes, cfg);
-  // OpenCode uses default_agent for the selected primary agent.
-  // A legacy top-level string "mode" is invalid in current OpenCode config schema.
-  const activeMode = String(
-    adapterId === 'opencode'
-      ? (cfg.default_agent ?? modes[0]?.id ?? 'default')
-      : (cfg.defaultMode ?? modes[0]?.id ?? 'default'),
-  );
-  const active = modeModels[activeMode] ?? Object.values(modeModels)[0] ?? { provider: 'default', model: 'auto' };
-  return {
-    provider: active.provider,
-    model: active.model,
-    mode: activeMode,
-    configPath: path,
-    modeModels,
-  };
+/** Groups models by provider, keeping the CLI's ordering. */
+function groupModels(models: AgentModel[]): Record<string, string[]> {
+  const grouped: Record<string, string[]> = {};
+  for (const model of models) {
+    const bucket = grouped[model.providerId];
+    const name = model.name ?? model.id;
+    if (bucket) bucket.push(name);
+    else grouped[model.providerId] = [name];
+  }
+  return grouped;
+}
+
+/** Exact CLI spec for a provider/name pair, so commands round-trip exactly. */
+function specIndex(models: AgentModel[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const model of models) {
+    index.set(`${model.providerId}/${model.name ?? model.id}`, model.id);
+  }
+  return index;
 }
 
 export async function probeCapabilities(
@@ -301,44 +205,55 @@ export async function probeCapabilities(
   force = false,
   modesOverride?: Mode[],
 ): Promise<AdapterCapabilities> {
-  const cached = CAPABILITY_CACHE.get(adapterId);
-  if (!modesOverride && !force && cached && Date.now() - cached.at < CAPABILITY_TTL_MS) return cached.data;
-
-  const modes = modesOverride ?? (await probeModes(adapterId, force));
-  const [{ providers, models }, current] = await Promise.all([
-    probeModelList(adapterId),
-    Promise.resolve(readCurrentFromConfig(adapterId, modes)),
-  ]);
-
-  // Make sure current provider/model exist in the list; if not, seed them.
-  const mergedModels = { ...models };
-  for (const mm of Object.values(current.modeModels)) {
-    if (!mergedModels[mm.provider]) mergedModels[mm.provider] = [mm.model];
-    else if (!mergedModels[mm.provider].includes(mm.model)) {
-      mergedModels[mm.provider] = [mm.model, ...mergedModels[mm.provider]];
-    }
+  const manifest = await getManifest(adapterId, force);
+  if (!manifest) {
+    return {
+      modes: [],
+      subagents: [],
+      providers: [],
+      models: {},
+      modeModels: {},
+      current: { provider: '', model: '', mode: '' },
+      source: 'none',
+    };
   }
-  const mergedProviders = new Set(providers);
-  for (const mm of Object.values(current.modeModels)) mergedProviders.add(mm.provider);
 
-  const data: AdapterCapabilities = {
+  const allModes = manifest.modes.map(toMode);
+  const modes = modesOverride?.length
+    ? modesOverride
+    : allModes.filter((mode) => (mode.type ?? 'primary') === 'primary');
+  const subagents = allModes.filter((mode) => mode.type === 'subagent');
+
+  const models = groupModels(manifest.models);
+  const providers = manifest.providers.length
+    ? manifest.providers.map((provider) => provider.id)
+    : Object.keys(models);
+
+  const specs = specIndex(manifest.models);
+  const modeModels: Record<string, ModeModelConfig> = {};
+  for (const [mode, value] of Object.entries(modeModelsFrom(manifest))) {
+    modeModels[mode] = {
+      provider: value.provider,
+      model: value.model,
+      spec: specs.get(`${value.provider}/${value.model}`),
+    };
+  }
+
+  return {
     modes,
-    providers: Array.from(mergedProviders),
-    models: mergedModels,
-    modeModels: current.modeModels,
+    subagents,
+    providers,
+    models,
+    modeModels,
     current: {
-      provider: current.provider,
-      model: current.model,
-      mode: current.mode,
+      provider: manifest.current?.provider ?? '',
+      model: manifest.current?.model ?? '',
+      mode: manifest.current?.mode ?? modes[0]?.id ?? '',
     },
-    configPath: current.configPath,
+    configPath: manifest.configPath,
+    source: manifest.source,
+    discoveredAt: manifest.discoveredAt,
+    supportsInteractive: manifest.supportsInteractive,
+    warnings: manifest.error ? [manifest.error] : undefined,
   };
-  CAPABILITY_CACHE.set(adapterId, { at: Date.now(), data });
-  return data;
 }
-
-export function invalidateCapability(adapterId: string): void {
-  CAPABILITY_CACHE.delete(adapterId);
-  MODE_CACHE.delete(adapterId);
-}
-

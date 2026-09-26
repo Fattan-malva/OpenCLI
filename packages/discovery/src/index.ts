@@ -267,3 +267,20 @@ export function agentFromDetection(
     installed: true,
   };
 }
+
+// Dynamic agent/model/provider discovery. Adapters describe a plan; this engine runs it.
+export {
+  discoverManifest,
+  filterHiddenAgents,
+  parseAgentList,
+  parseChoiceFlag,
+  parseModelList,
+  primaryModes,
+  providerLabel,
+  readCliConfig,
+  runProbe,
+  splitModelSpec,
+  subagentModes,
+  type DiscoverOptions,
+  type ProbeResult,
+} from './manifest.js';

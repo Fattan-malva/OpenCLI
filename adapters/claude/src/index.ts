@@ -8,10 +8,14 @@ import type {
   HealthResult,
   Capability,
   AgentMode,
+  AgentManifest,
+  DiscoveryPlan,
+  InteractiveContext,
   OpenCLIEvent,
 } from '@opencli/adapter';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { discoverManifest, parseChoiceFlag, runProbe } from '@opencli/discovery';
 
 const PROCESSES = new Map<string, ChildProcess>();
 
@@ -52,24 +56,49 @@ export class ClaudeAdapter implements AgentAdapter {
     ];
   }
 
+  /**
+   * Claude Code's real permission modes, scraped from its own help output.
+   *
+   * It has no agent listing command, and it has never had modes called `build`
+   * or `review`; declaring those offered users a choice that would fail. What it
+   * does declare is `--permission-mode`, so that is what gets read.
+   */
   async getModes(): Promise<AgentMode[]> {
-    return [
+    const executable = this.executablePath;
+    if (!executable) return [];
+
+    const probe = await runProbe(executable, ['--help'], { cwd: process.cwd(), timeoutMs: 20_000 });
+    const choices = parseChoiceFlag(`${probe.stdout}\n${probe.stderr}`, '--permission-mode');
+    return choices.map((id) => ({ id, name: id, type: 'primary' as const, source: 'cli' as const }));
+  }
+
+  discoveryPlan(): DiscoveryPlan {
+    return {
+      // No agentListArgs and no modelsArgs: Claude Code exposes neither. Its
+      // modes come from the help flag, and model choice is deliberately left to
+      // the CLI rather than fabricated here.
+      helpArgs: ['--help'],
+      choiceFlag: '--permission-mode',
+      supportsServe: false,
+      timeouts: { help: 20_000 },
+    };
+  }
+
+  async discover(context: InteractiveContext): Promise<AgentManifest> {
+    return discoverManifest(
+      this.discoveryPlan(),
       {
-        id: 'plan',
-        name: 'Plan',
-        permissions: { read: true, write: false, delete: false, terminal: false, network: false, git: false, install: false, system: false },
+        adapterId: this.id(),
+        executable: this.executablePath ?? 'claude',
+        cwd: context.workspacePath,
       },
       {
-        id: 'build',
-        name: 'Build',
-        permissions: { read: true, write: true, delete: true, terminal: true, network: true, git: true, install: true, system: false },
+        adapterName: this.name(),
+        version: await this.getVersion(),
+        capabilities: await this.getCapabilities(),
+        supportsInteractive: true,
       },
-      {
-        id: 'review',
-        name: 'Review',
-        permissions: { read: true, write: false, delete: false, terminal: false, network: false, git: false, install: false, system: false },
-      },
-    ];
+    );
   }
 
   async validate(): Promise<HealthResult> {
@@ -109,6 +138,25 @@ export class ClaudeAdapter implements AgentAdapter {
       },
       timeout: 600_000,
       riskLevel: context.mode === 'build' ? 'high' : 'medium',
+    };
+  }
+
+  /**
+   * Launches Claude Code's own UI.
+   *
+   * `buildCommand` uses `-p` for print mode, which discards the interface
+   * entirely. Interactive hosting passes no arguments so the real UI renders.
+   */
+  buildInteractiveCommand(context: InteractiveContext): CommandSpec {
+    return {
+      executable: this.executablePath ?? 'claude',
+      arguments: [],
+      workingDirectory: context.workspacePath,
+      environment: {
+        ...context.environment,
+        CLAUDE_PROJECT: context.projectPath,
+      },
+      riskLevel: 'low',
     };
   }
 

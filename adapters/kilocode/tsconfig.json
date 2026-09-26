@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../packages/domain" },
     { "path": "../../packages/adapter" },
+    { "path": "../../packages/discovery" },
     { "path": "../../packages/events" }
   ]
 }

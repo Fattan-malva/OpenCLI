@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { ADAPTERS, useStore } from '../store';
+import { useStore } from '../store';
+import { adapterMeta } from '../lib/data';
 import { Icon } from '../lib/icons';
 import { api } from '../lib/api';
 import type { AdapterCapabilities, ConfirmationPolicy, InteractionMode } from '../lib/types';
@@ -99,7 +100,8 @@ export function ChatComposer() {
           entries.push({ adapterId: session.adapterId, modeId: mode.id, key: `${session.adapterId}/${mode.id}` });
         }
       } else {
-        const fallback = session.activeMode ?? 'build';
+        // No invented mode: fall back to what the session reports, else nothing.
+        const fallback = session.activeMode ?? '';
         entries.push({ adapterId: session.adapterId, modeId: fallback, key: `${session.adapterId}/${fallback}` });
       }
     }
@@ -216,7 +218,7 @@ export function ChatComposer() {
             <div className="absolute left-0 bottom-full mb-2 w-72 z-40 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/40 p-1.5 space-y-0.5">
               <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-app-text">Agents &amp; modes</div>
               {matches.map((entry, index) => {
-                const meta = ADAPTERS[entry.adapterId] ?? ADAPTERS.system;
+                const meta = adapterMeta(entry.adapterId);
                 const selected = index === mentionIndex % matches.length;
                 return (
                   <button

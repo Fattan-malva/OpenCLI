@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ADAPTERS, providerRegistry, useStore } from '../store';
+import { useStore } from '../store';
+import { adapterMeta } from '../lib/data';
 import { api } from '../lib/api';
 import type { AdapterInfo, AdapterMode, Task } from '../lib/types';
 import { Icon } from '../lib/icons';
 import type { AdapterConfigs } from '../lib/types';
 
 export function Modal() {
-  const { modal, closeModal, adapterConfigs, saveAdapterConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks } = useStore();
+  const { modal, closeModal, adapterConfigs, saveAdapterConfig, submitNewTask, createWorkflow, showToast, addLog, adapters, activeProject, activeWorkflow, tasks, capabilities, modelsFor, loadCapabilities } = useStore();
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -40,6 +41,13 @@ export function Modal() {
     }
   }, [modal, adapterConfigs, adapters]);
 
+  // The adapter config form is driven entirely by the CLI's own report, so pull
+  // it in as soon as the modal targets an adapter.
+  useEffect(() => {
+    if (modal?.kind !== 'adapterConfig' || !modal.agentId) return;
+    void loadCapabilities(modal.agentId);
+  }, [modal?.kind, modal?.agentId]);
+
   useEffect(() => {
     if (modal?.kind !== 'addTask' || !activeProject || !agentId) return;
 
@@ -70,7 +78,10 @@ export function Modal() {
     setDraft((prev) => {
       if (!prev) return prev;
       const modes = { ...prev.modes, [draftMode]: { ...prev.modes[draftMode], [field]: value } };
-      if (field === 'provider') modes[draftMode].model = providerRegistry[value][0];
+      if (field === 'provider') {
+        // First model this CLI actually offers for that provider.
+        modes[draftMode].model = modelsFor(agentId, value)[0] ?? '';
+      }
       return { ...prev, modes };
     });
   };
@@ -138,7 +149,7 @@ export function Modal() {
               onSave={() => {
                 saveAdapterConfig(modal.agentId!, draft.modes);
                 closeModal();
-                showToast('Configuration Saved', `Updated capabilities for ${ADAPTERS[modal.agentId!].name}`, 'success');
+                showToast('Configuration Saved', `Updated capabilities for ` + adapterMeta(modal.agentId!).name, 'success');
                 addLog('config.updated', `Updated capabilities config for agent ${modal.agentId}`, 'system');
               }}
             />
@@ -452,8 +463,11 @@ function AdapterConfigBody({
   draft: AdapterConfigs[string];
   setField: (mode: string, field: 'provider' | 'model', value: string) => void;
 }) {
-  const agent = ADAPTERS[agentId];
-  if (!agent) return null;
+  const { capabilities, modelsFor } = useStore();
+  const agent = adapterMeta(agentId);
+  const caps = capabilities[agentId];
+  const providers = caps?.providers ?? [];
+  const modelCount = Object.values(caps?.models ?? {}).reduce((n, list) => n + list.length, 0);
 
   return (
     <div className="space-y-4">
@@ -463,15 +477,34 @@ function AdapterConfigBody({
         </div>
         <div>
           <h3 className="font-medium text-app-textStrong">{agent.name} Capabilities</h3>
-          <p className="text-xs text-app-text">Configure provider and model automatically per capability.</p>
+          <p className="text-xs text-app-text">
+            {caps
+              ? `Reported by the CLI: ${caps.modes.length} modes, ${providers.length} providers, ${modelCount} models.`
+              : 'Reading the CLI...'}
+          </p>
         </div>
       </div>
 
+      {caps?.warnings?.map((warning) => (
+        <div key={warning} className="text-xs text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-3 py-2">
+          {warning}
+        </div>
+      ))}
+
       {Object.keys(draft.modes).length === 0 && (
-        <div className="text-sm text-app-text italic">No configurable capabilities for this agent.</div>
+        <div className="text-sm text-app-text italic">This CLI reported no configurable modes.</div>
       )}
 
-      {Object.entries(draft.modes).map(([draftMode, route]) => (
+      {providers.length === 0 && caps && (
+        <div className="text-xs text-app-text border border-app-border rounded px-3 py-2">
+          This CLI manages its own models, so no model catalog is published. Its default
+          applies: <span className="text-app-textStrong">{caps.current.model || 'CLI default'}</span>
+        </div>
+      )}
+
+      {Object.entries(draft.modes).map(([draftMode, route]) => {
+        const available = modelsFor(agentId, route.provider);
+        return (
         <div key={draftMode} className="p-3 border border-app-border rounded-lg bg-app-bg">
           <div className="flex items-center justify-between mb-3">
             <span className="px-2.5 py-1 rounded bg-app-surface border border-app-border text-xs font-semibold uppercase tracking-wider text-app-textStrong flex items-center gap-2">
@@ -485,9 +518,11 @@ function AdapterConfigBody({
               <select
                 value={route.provider}
                 onChange={(e) => setField(draftMode, 'provider', e.target.value)}
-                className="w-full bg-app-surface border border-app-border rounded px-3 py-2 text-xs text-app-textStrong focus:outline-none focus:border-app-primary transition-colors"
+                disabled={providers.length === 0}
+                className="w-full bg-app-surface border border-app-border rounded px-3 py-2 text-xs text-app-textStrong focus:outline-none focus:border-app-primary transition-colors disabled:opacity-50"
               >
-                {Object.keys(providerRegistry).map((p) => (
+                {providers.length === 0 && <option value={route.provider}>{route.provider || 'n/a'}</option>}
+                {providers.map((p) => (
                   <option key={p} value={p}>
                     {p}
                   </option>
@@ -495,13 +530,17 @@ function AdapterConfigBody({
               </select>
             </div>
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-app-text mb-1.5 font-semibold">Model</label>
+              <label className="block text-[10px] uppercase tracking-wider text-app-text mb-1.5 font-semibold">
+                Model {available.length > 0 && <span className="text-app-text">({available.length})</span>}
+              </label>
               <select
                 value={route.model}
                 onChange={(e) => setField(draftMode, 'model', e.target.value)}
-                className="w-full bg-app-surface border border-app-border rounded px-3 py-2 text-xs text-app-textStrong focus:outline-none focus:border-app-primary transition-colors"
+                disabled={available.length === 0}
+                className="w-full bg-app-surface border border-app-border rounded px-3 py-2 text-xs text-app-textStrong focus:outline-none focus:border-app-primary transition-colors disabled:opacity-50"
               >
-                {(providerRegistry[route.provider] || []).map((m) => (
+                {available.length === 0 && <option value={route.model}>{route.model || 'CLI default'}</option>}
+                {available.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -510,7 +549,8 @@ function AdapterConfigBody({
             </div>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

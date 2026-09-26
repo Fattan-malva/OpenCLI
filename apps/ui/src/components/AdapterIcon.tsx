@@ -8,7 +8,29 @@ export function AdapterIcon({
   if (id === 'claude') return <ClaudeIcon className={className} />;
   if (id === 'opencode') return <OpenCodeIcon className={className} />;
   if (id === 'kilocode') return <KiloCodeIcon className={className} />;
-  return null;
+  // Brand marks are optional. An adapter without one still renders, using its
+  // own initial, so a newly installed CLI is never invisible.
+  return <FallbackIcon id={id} className={className} />;
+}
+
+function FallbackIcon({ id, className }: { id: string; className: string }) {
+  const initial = (id.replace(/[^a-z0-9]/gi, '').charAt(0) || '?').toUpperCase();
+  return (
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label={id}>
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="currentColor" opacity="0.12" />
+      <text
+        x="12"
+        y="12"
+        textAnchor="middle"
+        dominantBaseline="central"
+        fontSize="11"
+        fontWeight="600"
+        fill="currentColor"
+      >
+        {initial}
+      </text>
+    </svg>
+  );
 }
 
 function ClaudeIcon({ className }: { className: string }) {

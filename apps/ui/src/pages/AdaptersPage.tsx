@@ -7,7 +7,17 @@ import { api } from '../lib/api';
 type PendingAction = 'starting' | 'stopping';
 
 export function AdaptersPage({ active }: { active: boolean }) {
-  const { adapters, loadAdapters, sessions, activeProject, showToast, setSessions, setAdapterActive } = useStore();
+  const {
+    adapters,
+    loadAdapters,
+    sessions,
+    activeProject,
+    showToast,
+    setSessions,
+    setAdapterActive,
+    capabilities,
+    loadCapabilities,
+  } = useStore();
   const [installAdapterId, setInstallAdapterId] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Record<string, PendingAction>>({});
   const pendingRef = useRef<Record<string, PendingAction>>({});
@@ -148,17 +158,21 @@ export function AdaptersPage({ active }: { active: boolean }) {
                 const isStopping = pendingAction === 'stopping';
                 const isBusy = isStarting || isStopping;
                 const failedError = failedByAdapter[adapter.id];
+                const caps = capabilities[adapter.id];
+                // The server reports the real command it would run, so no
+                // adapter-specific launch string is needed here.
                 const runCmd =
-                  adapter.id === 'claude'
-                    ? 'claude'
-                    : adapter.id === 'kilocode'
-                      ? 'kilo serve --port 0'
-                      : adapter.id === 'opencode'
-                        ? 'opencode serve --port 0'
-                        : adapter.executable;
+                  sessions.find((s) => s.adapterId === adapter.id)?.command || adapter.executable;
                 return (
                   <div
                     key={adapter.id}
+                    onMouseEnter={() => {
+                      // Probe lazily: discovery spawns real CLI processes, so it
+                      // only runs for a card the user actually looks at.
+                      if (adapter.installed && !capabilities[adapter.id]) {
+                        void loadCapabilities(adapter.id);
+                      }
+                    }}
                     className={`adapter-card bg-app-surface border rounded-lg p-5 flex flex-col transition-colors ${
                       isBusy
                         ? 'adapter-card-shimmer border-app-primary/40'
@@ -208,23 +222,66 @@ export function AdaptersPage({ active }: { active: boolean }) {
                           {failedError}
                         </div>
                       )}
-                      <div className="text-xs text-app-text mb-2 uppercase tracking-wider font-semibold">Capabilities</div>
-                      <div className="flex flex-wrap gap-2 mb-4">
-                        {adapter.capabilities.length === 0 ? (
-                          <span className="px-2 py-0.5 rounded bg-app-bg border border-app-border text-xs text-app-text">
-                            general
-                          </span>
-                        ) : (
-                          adapter.capabilities.map((cap) => (
+                      <div className="text-xs text-app-text mb-2 uppercase tracking-wider font-semibold">
+                        Discovered
+                      </div>
+                      {caps ? (
+                        <div className="space-y-2 mb-4">
+                          {caps.warnings?.map((w) => (
+                            <div key={w} className="text-[11px] text-amber-400">{w}</div>
+                          ))}
+                          <Stat label="Modes" value={String(caps.modes.length)} />
+                          <Stat label="Subagents" value={String(caps.subagents.length)} />
+                          <Stat label="Providers" value={String(caps.providers.length)} />
+                          <Stat
+                            label="Models"
+                            value={String(
+                              Object.values(caps.models).reduce((n, l) => n + l.length, 0),
+                            )}
+                          />
+                          {caps.supportsInteractive && <Stat label="Native TUI" value="yes" />}
+                          {caps.modes.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-1">
+                              {caps.modes.map((m) => (
+                                <span
+                                  key={m.id}
+                                  className="px-2 py-0.5 rounded bg-app-bg border border-app-border text-[11px] text-app-text"
+                                >
+                                  {m.id}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {caps.subagents.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {caps.subagents.map((m) => (
+                                <span
+                                  key={m.id}
+                                  className="px-2 py-0.5 rounded bg-app-bg border border-app-border text-[11px] text-app-text/70"
+                                >
+                                  {m.id}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {caps.modes.length === 0 && caps.providers.length === 0 && (
+                            <div className="text-[11px] text-app-text italic">
+                              This CLI published nothing to probe.
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {(adapter.capabilities ?? []).map((cap) => (
                             <span
                               key={cap}
                               className="px-2 py-0.5 rounded bg-app-bg border border-app-border text-xs text-app-text"
                             >
                               {cap}
                             </span>
-                          ))
-                        )}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="pt-4 border-t border-app-border flex justify-between items-center">
                       <span
@@ -282,6 +339,15 @@ export function AdaptersPage({ active }: { active: boolean }) {
   );
 }
 
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-[11px]">
+      <span className="text-app-text">{label}</span>
+      <span className="text-app-textStrong font-medium">{value}</span>
+    </div>
+  );
+}
+
 function InstallModal({
   adapter,
   onClose,
@@ -290,7 +356,8 @@ function InstallModal({
   onClose: () => void;
 }) {
   const { showToast } = useStore();
-  const commands = adapter.installCommands.length > 0 ? adapter.installCommands : ['npm install -g ' + adapter.id];
+  // No invented command: an adapter without a published install path says so.
+  const commands = adapter.installCommands;
   const [copied, setCopied] = useState(false);
 
   const copy = async (cmd: string) => {

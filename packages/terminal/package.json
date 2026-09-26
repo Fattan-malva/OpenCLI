@@ -1,5 +1,5 @@
 {
-  "name": "@opencli/adapter-kilocode",
+  "name": "@opencli/terminal",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@opencli/domain": "*",
-    "@opencli/adapter": "*",
-    "@opencli/discovery": "*",
-    "@opencli/events": "*"
+    "@opencli/events": "*",
+    "node-pty": "^1.1.0"
   }
 }

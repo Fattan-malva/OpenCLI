@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ADAPTERS, useStore } from '../store';
+import { useStore } from '../store';
+import { adapterMeta } from '../lib/data';
 import { Icon } from '../lib/icons';
 import type { ChatMessage } from '../lib/types';
 
@@ -13,7 +14,7 @@ const STATUS_CHIP: Record<ChatMessage['status'], { label: string; icon: string; 
 };
 
 function agentMeta(agentId?: string) {
-  return (agentId && ADAPTERS[agentId]) || ADAPTERS.system;
+  return adapterMeta(agentId);
 }
 
 type ActivityRow =

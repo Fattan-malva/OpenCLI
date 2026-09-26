@@ -1,13 +1,41 @@
 ﻿// AgentAdapter interface based on 04-agent-adapter-spec.md
 import type {
   Agent,
+  AgentManifest,
   CommandSpec,
   DetectionResult,
+  DiscoveryPlan,
   HealthResult,
   Capability,
   AgentMode,
   OpenCLIEvent,
 } from '@opencli/domain';
+
+export interface ModelSelection {
+  provider: string;
+  model: string;
+  /**
+   * Exact spec as printed by the CLI, when it differs from `provider/model`.
+   *
+   * Kilo requires `kilo/~anthropic/claude-opus-latest` and rejects anything
+   * shorter, so rebuilding the argument from `provider` + `model` would send a
+   * spec the CLI refuses. Adapters must prefer this when it is present.
+   */
+  spec?: string;
+}
+
+/**
+ * Model spec to hand to a CLI, preferring the exact discovered spec.
+ *
+ * Falls back to `provider/model` only when no spec was carried through, which
+ * keeps older callers working.
+ */
+export function modelSpec(selection: ModelSelection | undefined): string | undefined {
+  if (!selection) return undefined;
+  if (selection.spec) return selection.spec;
+  if (selection.provider && selection.model) return `${selection.provider}/${selection.model}`;
+  return selection.model || undefined;
+}
 
 export interface AgentContext {
   projectPath: string;
@@ -15,13 +43,19 @@ export interface AgentContext {
   taskId: string;
   taskDescription: string;
   mode: string;
-  model?: {
-    provider: string;
-    model: string;
-  };
+  model?: ModelSelection;
   environment: Record<string, string>;
   relevantFiles: string[];
   projectMemory: Record<string, unknown>;
+}
+
+/** Context for hosting a CLI's own TUI on a PTY instead of scripting it. */
+export interface InteractiveContext {
+  projectPath: string;
+  workspacePath: string;
+  mode?: string;
+  model?: ModelSelection;
+  environment: Record<string, string>;
 }
 
 export interface AgentProcess {
@@ -35,9 +69,36 @@ export interface AgentAdapter {
   detect(): Promise<DetectionResult>;
   getVersion(): Promise<string>;
   getCapabilities(): Promise<Capability[]>;
+  /**
+   * User-selectable modes.
+   *
+   * Implementations must return what the CLI actually offers. Declaring a fixed
+   * list here is a bug: it will drift from the installed CLI and surface modes
+   * that do not exist.
+   */
   getModes(): Promise<AgentMode[]>;
   validate(): Promise<HealthResult>;
+
+  /**
+   * How to interrogate this CLI for its agents, models and providers.
+   * Purely declarative so the discovery engine needs no per-adapter branching.
+   */
+  discoveryPlan(): DiscoveryPlan;
+
+  /** Interrogates the installed CLI and reports what it supports. */
+  discover(context: InteractiveContext): Promise<AgentManifest>;
+
   buildCommand(context: AgentContext): CommandSpec;
+
+  /**
+   * Command that launches the CLI's native TUI, for hosting on a PTY.
+   *
+   * This is deliberately separate from `buildCommand`, which targets the
+   * non-interactive automation entry point. A CLI usually needs different
+   * arguments (often none at all) to show its interactive UI.
+   */
+  buildInteractiveCommand(context: InteractiveContext): CommandSpec;
+
   start(context: AgentContext): Promise<AgentProcess>;
   stop(processId: string): Promise<void>;
   pause(processId: string): Promise<void>;
@@ -75,7 +136,17 @@ export class AdapterRegistry {
 }
 
 // Re-export types for consumers
-export type { Agent, CommandSpec, DetectionResult, HealthResult, Capability, AgentMode, OpenCLIEvent } from '@opencli/domain';
+export type {
+  Agent,
+  AgentManifest,
+  CommandSpec,
+  DetectionResult,
+  HealthResult,
+  Capability,
+  AgentMode,
+  DiscoveryPlan,
+  OpenCLIEvent,
+} from '@opencli/domain';
 
 export interface AdapterRouteRequirement {
   requiredCapabilities?: string[];

@@ -298,10 +298,142 @@ export interface Capability {
   description?: string;
 }
 
+/**
+ * Whether an agent is offered to the user as a selectable mode.
+ *
+ * This is an OpenCLI-wide contract, not an adapter-specific concept. Every
+ * agent CLI that reports `name (primary|subagent)` maps onto it, and OpenCLI
+ * never needs to know which CLI an agent came from.
+ */
+export type AgentType = 'primary' | 'subagent';
+
+/** Where a manifest value came from, so the UI can explain stale data. */
+export type ManifestSource = 'runtime' | 'cli' | 'config' | 'declared' | 'none';
+
 export interface AgentMode {
   id: string;
   name: string;
-  permissions: PermissionSet;
+  /**
+   * `primary` modes are user-selectable; `subagent` modes are invoked by an
+   * agent rather than by a person. Defaults to `primary` so pre-existing
+   * callers keep working.
+   */
+  type?: AgentType;
+  description?: string;
+  /**
+   * Permission hints. Optional because discovered modes report whatever the
+   * CLI exposes, and some CLIs expose no permission model at all.
+   */
+  permissions?: PermissionSet;
+  /** True for the mode the CLI itself preselects. */
+  default?: boolean;
+  /** Free-form capability tags reported by the adapter. */
+  capabilities?: string[];
+  source?: ManifestSource;
+}
+
+export interface AgentModel {
+  /**
+   * Exact spec to hand back to the CLI, verbatim as the CLI printed it.
+   *
+   * Nothing may normalise this. Kilo prints `kilo/~anthropic/claude-opus-latest`
+   * and rejects the shortened form, so `id` is what gets sent to the CLI.
+   */
+  id: string;
+  /** Human readable model name, with any provider prefix removed. */
+  name?: string;
+  /** Grouping key for the UI, derived from the spec's provider segment. */
+  providerId: string;
+  capabilities?: Capability[];
+  source?: ManifestSource;
+}
+
+export interface AgentProvider {
+  id: string;
+  name: string;
+  models: string[];
+  /** Whether the adapter believes credentials are present. */
+  authenticated?: boolean;
+  source?: ManifestSource;
+}
+
+export interface AdapterInfo {
+  id: string;
+  name: string;
+  version?: string;
+  executable?: string;
+  /** False when the adapter is registered but its CLI is not on PATH. */
+  installed?: boolean;
+}
+
+/**
+ * Everything OpenCLI knows about one installed adapter, reported by the
+ * adapter itself rather than declared in OpenCLI.
+ *
+ * The UI renders this structure directly, which is what allows a new adapter
+ * to appear with no OpenCLI change.
+ */
+export interface AgentManifest {
+  adapter: AdapterInfo;
+  modes: AgentMode[];
+  models: AgentModel[];
+  providers: AgentProvider[];
+  capabilities: Capability[];
+  /** Model currently selected by the CLI or project routing. */
+  current?: { provider: string; model: string; mode: string };
+  /** Per-mode model selection as reported by the CLI or its config. */
+  modeModels?: Record<string, { provider: string; model: string }>;
+  /** True when the adapter can host a native TUI on a PTY. */
+  supportsInteractive?: boolean;
+  configPath?: string;
+  source: ManifestSource;
+  discoveredAt: string;
+  /** Populated when discovery failed; the rest of the manifest stays usable. */
+  error?: string;
+}
+
+/**
+ * Declarative description of how to interrogate one CLI.
+ *
+ * This is data, not branching: the discovery engine picks strategies from
+ * these fields, so no core code needs `if (adapter === 'kilo')`.
+ */
+export interface DiscoveryPlan {
+  /** Arguments for the subcommand that lists agents, e.g. `['agent','list']`. */
+  agentListArgs?: string[];
+  /** Arguments for the subcommand that lists models, e.g. `['models']`. */
+  modelsArgs?: string[];
+  /**
+   * A provider prefix the CLI puts in front of every model it lists, e.g. Kilo
+   * prints `kilo/~anthropic/...`. Stripping it before grouping exposes the real
+   * providers; the full spec is still preserved for sending back.
+   */
+  modelPrefix?: string;
+  /** Arguments used to scrape declared choices from help output. */
+  helpArgs?: string[];
+  /**
+   * Flag whose enumerated choices describe the agent modes, e.g.
+   * `--permission-mode`. Only consulted when the CLI has no agent listing
+   * command.
+   */
+  choiceFlag?: string;
+  /** Agent ids that exist for CLI internals and must not be offered. */
+  hiddenAgents?: string[];
+  /** Set when the CLI can serve a live HTTP catalog. */
+  supportsServe?: boolean;
+  /** Per-probe timeouts in milliseconds. */
+  timeouts?: { agentList?: number; models?: number; help?: number };
+}
+
+export interface DiscoveryContext {
+  adapterId: string;
+  executable: string;
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  /** Skip caches and re-probe. */
+  force?: boolean;
+  /** Project id, for project-scoped config lookups. */
+  projectId?: string;
 }
 
 export interface PermissionSet {

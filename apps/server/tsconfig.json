@@ -11,6 +11,10 @@
     { "path": "../../packages/runtime" },
     { "path": "../../packages/discovery" },
     { "path": "../../packages/adapter" },
+    { "path": "../../adapters/opencode" },
+    { "path": "../../adapters/kilocode" },
+    { "path": "../../adapters/claude" },
+    { "path": "../../packages/terminal" },
     { "path": "../../packages/scheduler" },
     { "path": "../../packages/git" },
     { "path": "../../packages/workspace" }

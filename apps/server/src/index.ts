@@ -1,4 +1,4 @@
-﻿import { Hono } from 'hono';
+import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
@@ -12,15 +12,15 @@ import { GitService } from '@opencli/git';
 import { WorkspaceService } from '@opencli/workspace';
 import { AdapterRegistry, AdapterRouter } from '@opencli/adapter';
 import { discoverAllAgents, agentFromDetection, detectOS } from '@opencli/discovery';
-import { OpenCodeAdapter } from '@opencli/adapter-opencode';
-import { KiloCodeAdapter } from '@opencli/adapter-kilocode';
-import { ClaudeAdapter } from '@opencli/adapter-claude';
+import { adapterRegistry, setAdapterExecutable, allAdapters } from './adapters.js';
+import { attachTerminalGateway } from './terminal-ws.js';
+import { PtyManager } from '@opencli/terminal';
 import { migrations } from '@opencli/db/src/migrations/index.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { probeCapabilities } from './cli.js';
+import { probeCapabilities, getManifest, invalidateCapability } from './cli.js';
 import { startSession, stopSession, listSessions, getSession, shutdownAll, setSessionMode, setSessionModel, getSessionAgentModes, stopAll as stopAllProjectSessions } from './sessions.js';
 import { configureWorkflowRuntime, refreshWorkflow, restoreRunningWorkflows } from './workflow.js';
 import {
@@ -57,7 +57,6 @@ const runtime = new ProcessManager(eventBus);
 const scheduler = new Scheduler(eventBus, { maxConcurrent: 8 });
 const gitService = new GitService(eventBus);
 const workspaceService = new WorkspaceService(eventBus);
-const adapterRegistry = new AdapterRegistry();
 
 // Run migrations
 db.migrate(migrations);
@@ -132,23 +131,13 @@ function getSystemSettings() {
 
 scheduler.setMaxConcurrent(getSystemSettings().maxParallelAgents);
 
-// Register adapters
-const openCodeAdapter = new OpenCodeAdapter();
-const kiloCodeAdapter = new KiloCodeAdapter();
-const claudeAdapter = new ClaudeAdapter();
-adapterRegistry.register(openCodeAdapter);
-adapterRegistry.register(kiloCodeAdapter);
-adapterRegistry.register(claudeAdapter);
 
 // Auto-discover agents on startup
 async function discoverAgents() {
   const results = discoverAllAgents();
   for (const { definition, result } of results) {
     if (result.detected && result.path) {
-      const adapter = adapterRegistry.get(definition.adapterId);
-      if (adapter && 'setExecutablePath' in adapter) {
-        (adapter as any).setExecutablePath(result.path);
-      }
+      setAdapterExecutable(definition.adapterId, result.path);
       const agent = agentFromDetection(definition, result);
       if (agent) {
         db.upsertAgent(agent);
@@ -420,6 +409,37 @@ api.get('/adapters/:id/capabilities', async (c) => {
   } catch (e: any) {
     return c.json({ error: e?.message ?? 'probe failed' }, 500);
   }
+});
+
+/**
+ * Full manifest for one adapter: every mode, subagent, provider and model the
+ * CLI itself reported. The UI renders this directly, so adding a new adapter
+ * needs no OpenCLI change.
+ */
+api.get('/adapters/:id/manifest', async (c) => {
+  const id = c.req.param('id');
+  const force = c.req.query('force') === '1';
+  const manifest = await getManifest(id, force);
+  if (!manifest) return c.json({ error: `Adapter not available: ${id}` }, 404);
+  return c.json(manifest);
+});
+
+/** Manifests for every installed adapter, in one request. */
+api.get('/manifests', async (c) => {
+  const force = c.req.query('force') === '1';
+  const entries = allAdapters().map((adapter) => adapter.id());
+  const manifests = await Promise.all(
+    entries.map(async (id) => ({ id, manifest: await getManifest(id, force) })),
+  );
+  return c.json(Object.fromEntries(manifests.filter((entry) => entry.manifest).map((e) => [e.id, e.manifest])));
+});
+
+api.post('/adapters/:id/manifest/refresh', async (c) => {
+  const id = c.req.param('id');
+  invalidateCapability(id);
+  const manifest = await getManifest(id, true);
+  if (!manifest) return c.json({ error: `Adapter not available: ${id}` }, 404);
+  return c.json(manifest);
 });
 
 api.get('/projects/:projectId/adapters/:adapterId/capabilities', async (c) => {
@@ -694,10 +714,7 @@ api.post('/discovery/scan', async (c) => {
   const agents = [];
   for (const { definition, result } of results) {
     if (result.detected && result.path) {
-      const adapter = adapterRegistry.get(definition.adapterId);
-      if (adapter && 'setExecutablePath' in adapter) {
-        (adapter as any).setExecutablePath(result.path);
-      }
+      setAdapterExecutable(definition.adapterId, result.path);
       const agent = agentFromDetection(definition, result);
       if (agent) {
         db.upsertAgent(agent);
@@ -1141,12 +1158,35 @@ app.get('*', serveStatic({ path: join(UI_DIST, 'index.html') }));
 // === Start server ===
 const port = parseInt(process.env.PORT ?? '3000', 10);
 
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`\n  ╔══════════════════════════════════════╗`);
-  console.log(`  ║         OpenCLI is running           ║`);
-  console.log(`  ╠══════════════════════════════════════╣`);
-  console.log(`  ║  Server : http://localhost:${info.port}     ║`);
-  console.log(`  ║  UI     : http://localhost:${info.port}     ║`);
-  console.log(`  ║  Data   : ${DATA_DIR}  ║`);
-  console.log(`  ╚══════════════════════════════════════╝\n`);
+// PTY hosting for each CLI's native TUI. Output is streamed to the browser
+// verbatim, so nothing the CLI prints is lost or reformatted.
+const ptyManager = new PtyManager({ eventBus });
+
+api.get('/terminals', (c) => {
+  const projectId = c.req.query('projectId');
+  return c.json(ptyManager.list(projectId ? { projectId } : {}));
+});
+
+api.post('/terminals/kill-project/:projectId', (c) => {
+  return c.json({ killed: ptyManager.killProject(c.req.param('projectId')) });
+});
+
+const httpServer = serve({ fetch: app.fetch, port }, (info) => {
+  attachTerminalGateway(httpServer, ptyManager, db);
+  console.log(`\n  +--------------------------------------+`);
+  console.log(`  �         OpenCLI is running           �`);
+  console.log(`  �--------------------------------------�`);
+  console.log(`  �  Server : http://localhost:${info.port}     �`);
+  console.log(`  �  UI     : http://localhost:${info.port}     �`);
+  console.log(`  �  Data   : ${DATA_DIR}  �`);
+  console.log(`  +--------------------------------------+\n`);
+});
+
+process.on('SIGINT', () => {
+  ptyManager.killAll();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  ptyManager.killAll();
+  process.exit(0);
 });

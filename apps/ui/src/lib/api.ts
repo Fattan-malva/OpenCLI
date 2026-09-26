@@ -1,5 +1,6 @@
 import type {
   AdapterCapabilities,
+  AgentManifest,
   AdapterInfo,
   AdapterSession,
   ChatMessage,
@@ -105,6 +106,18 @@ export const api = {
     return request<AdapterCapabilities>(
       `/projects/${encodeURIComponent(projectId)}/adapters/${encodeURIComponent(adapterId)}/capabilities`,
     );
+  },
+  /** Full manifest for one adapter: every mode, provider and model it reported. */
+  getManifest(id: string, force = false) {
+    return request<AgentManifest>(`/adapters/${encodeURIComponent(id)}/manifest${force ? '?force=1' : ''}`);
+  },
+  /** Manifests for every installed adapter in a single request. */
+  getManifests(force = false) {
+    return request<Record<string, AgentManifest>>(`/manifests${force ? '?force=1' : ''}`);
+  },
+  /** Drops the cache and re-probes the CLI. */
+  refreshManifest(id: string) {
+    return request<AgentManifest>(`/adapters/${encodeURIComponent(id)}/manifest/refresh`, { method: 'POST' });
   },
   getModelRouting(projectId: string) {
     return request<Record<string, Record<string, { provider: string; model: string }>>>(

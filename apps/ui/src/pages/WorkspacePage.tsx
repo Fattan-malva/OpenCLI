@@ -4,7 +4,9 @@ import { ChatThread } from '../components/ChatThread';
 import { ChatComposer } from '../components/ChatComposer';
 import { ChatThreadList } from '../components/ChatThreadList';
 import { Icon } from '../lib/icons';
-import { ADAPTERS, STATUS, useStore } from '../store';
+import { STATUS, useStore } from '../store';
+import { adapterMeta } from '../lib/data';
+import { TerminalPanel } from '../components/TerminalPanel';
 import { api } from '../lib/api';
 
 export function WorkspacePage({ active }: { active: boolean }) {
@@ -260,7 +262,9 @@ function LivePanels() {
 
 function LivePanel({ adapterId, tasks }: { adapterId: string; tasks: ReturnType<typeof useStore>['tasks'] }) {
   const scrollRef = useRef<HTMLPreElement | null>(null);
-  const meta = ADAPTERS[adapterId] ?? ADAPTERS.system;
+  const meta = adapterMeta(adapterId);
+  const { activeProject, capabilities } = useStore();
+  const [view, setView] = useState<'output' | 'terminal'>('output');
   const chatTask = useMemo(() => {
     const agentTasks = tasks.filter((task) => task.agentId === adapterId && task.liveOutput);
     return agentTasks[agentTasks.length - 1];
@@ -273,6 +277,7 @@ function LivePanel({ adapterId, tasks }: { adapterId: string; tasks: ReturnType<
   }, [output]);
 
   const statusInfo = STATUS[chatTask?.status ?? 'PENDING'];
+  const canHost = capabilities[adapterId]?.supportsInteractive !== false;
 
   return (
     <div className="rounded-lg border border-app-border bg-app-surface/70 overflow-hidden">
@@ -280,17 +285,43 @@ function LivePanel({ adapterId, tasks }: { adapterId: string; tasks: ReturnType<
         <Icon name={meta.icon} className={`w-3.5 h-3.5 ${meta.color}`} />
         <span className={`text-xs font-semibold ${meta.color}`}>{meta.name}</span>
         <span className="text-[10px] font-mono text-app-text">{adapterId}</span>
-        <span className="ml-auto flex items-center gap-1 text-[10px] text-app-text">
-          <Icon name={statusInfo.icon} className="w-3 h-3" />
-          {chatTask ? statusInfo.label : 'idle'}
-        </span>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => setView('output')}
+            className={`text-[10px] px-1.5 py-0.5 rounded ${view === 'output' ? 'bg-app-border text-app-textStrong' : 'text-app-text'}`}
+          >
+            Output
+          </button>
+          {activeProject && canHost && (
+            <button
+              onClick={() => setView('terminal')}
+              className={`text-[10px] px-1.5 py-0.5 rounded ${view === 'terminal' ? 'bg-app-border text-app-textStrong' : 'text-app-text'}`}
+            >
+              Terminal
+            </button>
+          )}
+          <span className="flex items-center gap-1 text-[10px] text-app-text ml-1">
+            <Icon name={statusInfo.icon} className="w-3 h-3" />
+            {chatTask ? statusInfo.label : 'idle'}
+          </span>
+        </div>
       </div>
-      <pre
-        ref={scrollRef}
-        className="max-h-64 overflow-y-auto px-3 py-2 text-[11px] leading-relaxed font-mono text-app-textStrong whitespace-pre-wrap break-words"
-      >
-        {output || 'Waiting for live output…'}
-      </pre>
+      {view === 'terminal' && activeProject ? (
+        <div className="h-72">
+          <TerminalPanel
+            projectId={activeProject.id}
+            adapterId={adapterId}
+            capabilities={capabilities[adapterId]}
+          />
+        </div>
+      ) : (
+        <pre
+          ref={scrollRef}
+          className="max-h-64 overflow-y-auto px-3 py-2 text-[11px] leading-relaxed font-mono text-app-textStrong whitespace-pre-wrap break-words"
+        >
+          {output || 'Waiting for live output…'}
+        </pre>
+      )}
     </div>
   );
 }

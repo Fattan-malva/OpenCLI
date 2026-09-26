@@ -11,6 +11,7 @@
   "dependencies": {
     "@opencli/domain": "*",
     "@opencli/adapter": "*",
+    "@opencli/discovery": "*",
     "@opencli/events": "*"
   }
 }

@@ -4,14 +4,16 @@ import type { PageId } from '../lib/types';
 
 const NAV: { id: PageId; label: string; icon: string; count?: string }[] = [
   { id: 'workspace', label: 'WorkSpace', icon: 'layout-dashboard' },
-  { id: 'adapters', label: 'Adapters', icon: 'bot', count: '4' },
+  { id: 'adapters', label: 'Adapters', icon: 'bot' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu' },
   { id: 'workspaces', label: 'Workspaces', icon: 'git-merge' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
 export function Sidebar() {
-  const { page, showPage } = useStore();
+  const { page, showPage, adapters } = useStore();
+  // Counts come from the server, never from a hardcoded total.
+  const installedCount = adapters.filter((a) => a.installed).length;
 
   return (
     <aside className="w-14 sm:w-60 border-r border-app-border bg-app-surface flex flex-col shrink-0 transition-all duration-300">
@@ -33,9 +35,9 @@ export function Sidebar() {
                 className={`w-5 h-5 mr-3 ${active && item.id === 'workspace' ? 'text-app-primary' : 'group-hover:text-app-textStrong'}`}
               />
               <span className="hidden sm:block font-medium">{item.label}</span>
-              {item.count && (
+              {item.id === 'adapters' && installedCount > 0 && (
                 <span className="hidden sm:flex ml-auto bg-app-border text-xs px-1.5 py-0.5 rounded-full">
-                  {item.count}
+                  {installedCount}
                 </span>
               )}
             </button>

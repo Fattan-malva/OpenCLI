@@ -120,15 +120,25 @@ export interface AdapterInfo {
 export interface AdapterMode {
   id: string;
   name: string;
+  /** `primary` modes are user-selectable; `subagent` ones are orchestration targets. */
+  type?: 'primary' | 'subagent';
+  description?: string;
+  /** Where the mode came from: the CLI's own listing, its help output, or a default. */
+  source?: string;
 }
 
 export interface ModeModelConfig {
   provider: string;
   model: string;
+  /** Exact spec to hand back to the CLI, when it differs from `provider/model`. */
+  spec?: string;
 }
 
 export interface AdapterCapabilities {
+  /** User-selectable primary agents, as reported by the CLI. */
   modes: AdapterMode[];
+  /** Secondary agents the CLI exposes, shown in their own section. */
+  subagents: AdapterMode[];
   providers: string[];
   models: Record<string, string[]>;
   modeModels: Record<string, ModeModelConfig>;
@@ -138,6 +148,57 @@ export interface AdapterCapabilities {
     mode: string;
   };
   configPath?: string;
+  /** How the data was obtained (`cli`, `config`, `none`) and when. */
+  source?: string;
+  discoveredAt?: string;
+  /** True when the adapter can host a native TUI on a PTY. */
+  supportsInteractive?: boolean;
+  /** Non-fatal problems hit while probing. */
+  warnings?: string[];
+}
+
+export interface AgentModelEntry {
+  /** Exact spec to send back to the CLI, verbatim as the CLI printed it. */
+  id: string;
+  name?: string;
+  providerId: string;
+  source?: string;
+}
+
+export interface AgentProviderEntry {
+  id: string;
+  name: string;
+  models: string[];
+  authenticated?: boolean;
+  source?: string;
+}
+
+/**
+ * Everything one installed CLI reported about itself.
+ *
+ * The UI renders this structure directly, which is what lets a new CLI appear
+ * with no OpenCLI change.
+ */
+export interface AgentManifest {
+  adapter: {
+    id: string;
+    name: string;
+    version?: string;
+    executable?: string;
+    installed?: boolean;
+  };
+  modes: AdapterMode[];
+  models: AgentModelEntry[];
+  providers: AgentProviderEntry[];
+  capabilities: { id: string; name: string }[];
+  current?: { provider: string; model: string; mode: string };
+  modeModels?: Record<string, { provider: string; model: string }>;
+  supportsInteractive?: boolean;
+  configPath?: string;
+  source: string;
+  discoveredAt: string;
+  /** Populated when discovery failed; the rest of the manifest stays usable. */
+  error?: string;
 }
 
 export interface AdapterSession {

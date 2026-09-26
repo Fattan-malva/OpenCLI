@@ -10,6 +10,7 @@
     { "path": "packages/discovery" },
     { "path": "packages/installer" },
     { "path": "packages/adapter" },
+    { "path": "packages/terminal" },
     { "path": "packages/scheduler" },
     { "path": "packages/git" },
     { "path": "packages/workspace" },

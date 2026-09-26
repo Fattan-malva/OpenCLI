@@ -11,17 +11,13 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import {
-  ADAPTERS,
-  initialAdapterConfigs,
-  providerRegistry,
-  STATUS,
-} from './lib/data';
+import { ADAPTERS, STATUS } from './lib/data';
 import { api, getToken, setToken } from './lib/api';
 import type {
   AdapterInfo,
   AdapterRequest,
   AdapterSession,
+  AdapterCapabilities,
   AdapterConfigs,
   ChatMessage,
   ConfirmationPolicy,
@@ -85,6 +81,11 @@ export interface Store {
   clearLogs: () => void;
   terminalRef: RefObject<HTMLDivElement | null>;
   adapterConfigs: AdapterConfigs;
+  /** Live capability data per adapter, straight from the CLI. */
+  capabilities: Record<string, AdapterCapabilities>;
+  loadCapabilities: (agentId: string, force?: boolean) => Promise<void>;
+  /** Models a provider offers for an adapter, as reported by the CLI. */
+  modelsFor: (agentId: string, provider: string) => string[];
   saveAdapterConfig: (agentId: string, modes: AdapterConfigs[string]['modes']) => void;
   updateAgentRoute: (agentId: string, mode: string, field: 'provider' | 'model', value: string) => void;
   submitNewTask: (opts: { title: string; desc: string; agentId: string; mode: string; dependencies?: string[]; fileScopes?: string[] }) => Promise<boolean>;
@@ -158,7 +159,9 @@ function mapBackendTask(task: {
     description: task.description ?? '',
     status: statusMap[task.status] ?? 'PENDING',
     agentId: task.agentId ?? 'system',
-    mode: task.modeId ?? 'build',
+    // No assumed mode name: the server validates it against what the CLI
+    // actually reports, so an empty value is honest rather than wrong.
+    mode: task.modeId ?? '',
     workspace: task.workspaceId ?? 'project',
     dependencies: task.dependencies,
   };
@@ -205,9 +208,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const terminalRef = useRef<HTMLDivElement | null>(null);
-  const [adapterConfigs, setAdapterConfigs] = useState<AdapterConfigs>(
-    () => JSON.parse(JSON.stringify(initialAdapterConfigs)),
-  );
+  const [adapterConfigs, setAdapterConfigs] = useState<AdapterConfigs>({});
+  const [capabilities, setCapabilities] = useState<Record<string, AdapterCapabilities>>({});
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [sessions, setSessionsState] = useState<AdapterSession[]>([]);
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
@@ -899,6 +901,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [activeWorkflow, activeProject?.id, loadWorkflows, loadTasks, showToast]);
 
+  const loadCapabilities = async (agentId: string, force = false) => {
+    try {
+      const caps = await api.getCapabilities(agentId, force);
+      setCapabilities((prev) => ({ ...prev, [agentId]: caps }));
+
+      // Seed the local routing view from what the CLI itself reports, so the
+      // form opens on the adapter's real selections instead of a guess.
+      setAdapterConfigs((prev) => {
+        if (prev[agentId]) return prev;
+        const modes: AdapterConfigs[string]['modes'] = {};
+        for (const [mode, routed] of Object.entries(caps.modeModels ?? {})) {
+          modes[mode] = { provider: routed.provider, model: routed.model };
+        }
+        if (Object.keys(modes).length === 0) {
+          for (const mode of caps.modes) {
+            modes[mode.id] = { provider: caps.current.provider, model: caps.current.model };
+          }
+        }
+        return { ...prev, [agentId]: { modes } };
+      });
+    } catch {
+      // A failed probe leaves the adapter without selectable data rather than
+      // inventing any.
+    }
+  };
+
+  const modelsFor = (agentId: string, provider: string): string[] =>
+    capabilities[agentId]?.models?.[provider] ?? [];
+
   const saveAdapterConfig = (agentId: string, modes: AdapterConfigs[string]['modes']) => {
     setAdapterConfigs((prev) => ({ ...prev, [agentId]: { modes } }));
   };
@@ -909,21 +940,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     field: 'provider' | 'model',
     value: string,
   ) => {
+    let pickedModel = '';
     setAdapterConfigs((prev) => {
       const cfg = prev[agentId];
       if (!cfg) return prev;
       const modes = { ...cfg.modes, [mode]: { ...cfg.modes[mode] } };
       if (field === 'provider') {
+        // The first model is whatever this CLI actually offers for that
+        // provider; there is no built-in list to fall back on.
+        const available = capabilities[agentId]?.models?.[value] ?? [];
+        pickedModel = available[0] ?? '';
         modes[mode].provider = value;
-        modes[mode].model = providerRegistry[value][0];
+        modes[mode].model = pickedModel;
       } else {
         modes[mode].model = value;
       }
       return { ...prev, [agentId]: { modes } };
     });
-    const cfg = adapterConfigs[agentId]?.modes[mode];
     if (field === 'provider') {
-      showToast('Routing Updated', `${agentId} [${mode}] now uses ${value} (${providerRegistry[value][0]})`, 'info');
+      showToast(
+        'Routing Updated',
+        pickedModel
+          ? `${agentId} [${mode}] now uses ${value} (${pickedModel})`
+          : `${agentId} reported no models for ${value}`,
+        pickedModel ? 'info' : 'error',
+      );
       addLog('config.updated', `Changed ${agentId} mode '${mode}' to provider ${value}`, 'system');
     } else {
       showToast('Model Updated', `${agentId} [${mode}] now uses ${value}`, 'success');
@@ -1000,6 +1041,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     clearLogs,
     terminalRef,
     adapterConfigs,
+    capabilities,
+    loadCapabilities,
+    modelsFor,
     saveAdapterConfig,
     updateAgentRoute,
     submitNewTask,
@@ -1026,4 +1070,4 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export { ADAPTERS, COLOR_CLASSES, TOAST_STYLE, logTypeColor, providerRegistry, STATUS };
+export { ADAPTERS, COLOR_CLASSES, TOAST_STYLE, logTypeColor, STATUS };

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AdapterRegistry, AdapterRouter, type AgentAdapter } from './index.js';
+import { AdapterRegistry, AdapterRouter, modelSpec, type AgentAdapter } from './index.js';
 
 function adapter(id: string, capabilities: string[]): AgentAdapter {
   return {
@@ -10,7 +10,10 @@ function adapter(id: string, capabilities: string[]): AgentAdapter {
     getCapabilities: vi.fn(async () => capabilities.map((capability) => ({ id: capability, name: capability }))),
     getModes: vi.fn(async () => []),
     validate: vi.fn(),
+    discoveryPlan: vi.fn(() => ({})),
+    discover: vi.fn(),
     buildCommand: vi.fn(),
+    buildInteractiveCommand: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
     pause: vi.fn(),
@@ -57,5 +60,25 @@ describe('AdapterRouter', () => {
     const router = new AdapterRouter(registry, () => false);
 
     await expect(router.resolve({ requiredCapabilities: ['coding'] })).resolves.toBeUndefined();
+  });
+});
+
+describe('modelSpec', () => {
+  it('prefers the exact discovered spec over rebuilding provider/model', () => {
+    expect(
+      modelSpec({ provider: 'anthropic', model: 'claude-opus-latest', spec: 'kilo/~anthropic/claude-opus-latest' }),
+    ).toBe('kilo/~anthropic/claude-opus-latest');
+  });
+
+  it('falls back to provider/model when no spec was carried through', () => {
+    expect(modelSpec({ provider: 'google', model: 'gemini-pro' })).toBe('google/gemini-pro');
+  });
+
+  it('uses the bare model when the CLI has no provider concept', () => {
+    expect(modelSpec({ provider: '', model: 'claude-opus-latest' })).toBe('claude-opus-latest');
+  });
+
+  it('returns undefined for a missing selection', () => {
+    expect(modelSpec(undefined)).toBeUndefined();
   });
 });

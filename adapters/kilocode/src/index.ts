@@ -1,4 +1,4 @@
-﻿// Kilo Code adapter
+// Kilo Code adapter
 import type {
   AgentAdapter,
   AgentContext,
@@ -8,12 +8,37 @@ import type {
   HealthResult,
   Capability,
   AgentMode,
+  AgentManifest,
+  DiscoveryPlan,
+  InteractiveContext,
   OpenCLIEvent,
 } from '@opencli/adapter';
+import { modelSpec } from '@opencli/adapter';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { discoverManifest, filterHiddenAgents, parseAgentList, runProbe } from '@opencli/discovery';
 
 const PROCESSES = new Map<string, ChildProcess>();
+
+/** Agents Kilo keeps for internal bookkeeping rather than user selection. */
+// Only true implementation detail is hidden. Agents the CLI reports as
+// subagents (explore, general, ...) are kept and surfaced separately.
+const INTERNAL_AGENTS = ['compaction', 'summary', 'title'];
+
+function configPath(): string | undefined {
+  const home = homedir();
+  for (const candidate of [
+    join(home, '.config', 'kilo', 'kilo.json'),
+    join(home, '.config', 'kilo', 'kilo.jsonc'),
+    join(home, '.config', 'kilo', 'opencode.json'),
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 export class KiloCodeAdapter implements AgentAdapter {
   private executablePath: string | undefined;
@@ -51,24 +76,52 @@ export class KiloCodeAdapter implements AgentAdapter {
     ];
   }
 
+  /**
+   * Kilo's real modes, read from the installed CLI.
+   *
+   * Kilo ships more modes than the three that used to be declared here (ask,
+   * code, debug, orchestrator) and they change between releases, so the list is
+   * always read rather than assumed.
+   */
   async getModes(): Promise<AgentMode[]> {
-    return [
+    const executable = this.executablePath;
+    if (!executable) return [];
+
+    const probe = await runProbe(executable, ['agent', 'list'], { cwd: process.cwd(), timeoutMs: 45_000 });
+    const modes = filterHiddenAgents(parseAgentList(`${probe.stdout}\n${probe.stderr}`), INTERNAL_AGENTS);
+    return modes.filter((mode) => (mode.type ?? 'primary') === 'primary');
+  }
+
+  discoveryPlan(): DiscoveryPlan {
+    return {
+      agentListArgs: ['agent', 'list'],
+      modelsArgs: ['models'],
+      // Every model Kilo prints is namespaced under `kilo/`, which would
+      // otherwise collapse all 300+ models into one provider group.
+      modelPrefix: 'kilo',
+      helpArgs: ['--help'],
+      hiddenAgents: INTERNAL_AGENTS,
+      supportsServe: true,
+      timeouts: { agentList: 45_000, models: 25_000, help: 20_000 },
+    };
+  }
+
+  async discover(context: InteractiveContext): Promise<AgentManifest> {
+    return discoverManifest(
+      this.discoveryPlan(),
       {
-        id: 'plan',
-        name: 'Plan',
-        permissions: { read: true, write: false, delete: false, terminal: false, network: false, git: false, install: false, system: false },
+        adapterId: this.id(),
+        executable: this.executablePath ?? 'kilo',
+        cwd: context.workspacePath,
       },
       {
-        id: 'build',
-        name: 'Build',
-        permissions: { read: true, write: true, delete: true, terminal: true, network: true, git: true, install: false, system: false },
+        adapterName: this.name(),
+        version: await this.getVersion(),
+        capabilities: await this.getCapabilities(),
+        supportsInteractive: true,
+        configPath: configPath(),
       },
-      {
-        id: 'review',
-        name: 'Review',
-        permissions: { read: true, write: false, delete: false, terminal: false, network: false, git: false, install: false, system: false },
-      },
-    ];
+    );
   }
 
   async validate(): Promise<HealthResult> {
@@ -94,7 +147,7 @@ export class KiloCodeAdapter implements AgentAdapter {
     // a valid Kilo flag and causes the CLI to print its help and exit.
     if (context.mode) args.push('--agent', context.mode);
     if (context.model?.provider && context.model.model) {
-      args.push('--model', `${context.model.provider}/${context.model.model}`);
+      args.push('--model', modelSpec(context.model) ?? `${context.model.provider}/${context.model.model}`);
     }
 
     return {
@@ -108,6 +161,25 @@ export class KiloCodeAdapter implements AgentAdapter {
       },
       timeout: 600_000,
       riskLevel: 'medium',
+    };
+  }
+
+  /**
+   * Launches Kilo's own TUI.
+   *
+   * Kilo's non-interactive path is `run <prompt>`; interactive hosting passes
+   * no arguments so the real interface renders and receives keystrokes.
+   */
+  buildInteractiveCommand(context: InteractiveContext): CommandSpec {
+    return {
+      executable: this.executablePath ?? 'kilo',
+      arguments: [],
+      workingDirectory: context.workspacePath,
+      environment: {
+        ...context.environment,
+        KILO_PROJECT: context.projectPath,
+      },
+      riskLevel: 'low',
     };
   }
 

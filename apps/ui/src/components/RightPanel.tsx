@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { ADAPTERS, useStore } from '../store';
+import { useStore } from '../store';
+import { adapterMeta } from '../lib/data';
 import { logTypeColor } from '../store';
 import { Icon } from '../lib/icons';
 import type { LogEntry } from '../lib/types';
@@ -33,7 +34,7 @@ function LogLine({ entry }: { entry: LogEntry }) {
   const { time, type, message, agentId, taskId } = entry;
   const typeColor = logTypeColor(type);
   const shortType = type.split('.').pop() ?? type;
-  const agent = agentId ? ADAPTERS[agentId] : undefined;
+  const agent = agentId ? adapterMeta(agentId) : undefined;
 
   return (
     <div className="mb-1 hover:bg-white/[0.02] -mx-4 px-4 py-0.5 rounded transition-colors">
@@ -73,12 +74,12 @@ export function RightPanel() {
       ? {
           name: activeProject.name,
           path: activeProject.path,
-          settings: { maxParallelAgents: 4, defaultMode: 'build' },
+          settings: { maxParallelAgents: 4, defaultMode: '' },
         }
       : {
           name: '—',
           path: '—',
-          settings: { maxParallelAgents: 4, defaultMode: 'build' },
+          settings: { maxParallelAgents: 4, defaultMode: '' },
         },
     workflow: activeWorkflow
       ? {
