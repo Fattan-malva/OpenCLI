@@ -847,7 +847,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ),
             );
             if (request) {
-              setChatRequests((prev) => ({ ...prev, [chatMessageId]: request }));
+              // A request the policy already approved needs no answer from the
+              // user, so it is recorded as handled rather than left prompting.
+              const autoApproved = (event.payload as any)?.autoApproved === true;
+              if (autoApproved) {
+                setChatRequests((prev) => {
+                  const next = { ...prev };
+                  delete next[chatMessageId];
+                  return next;
+                });
+              } else {
+                setChatRequests((prev) => ({ ...prev, [chatMessageId]: request }));
+              }
             }
             if (event.taskId && chunk) {
               setTasks((prev) => prev.map((task) =>

@@ -684,3 +684,57 @@ describe('model routing keeps the exact CLI spec', () => {
     expect(entry.provider).toBe('google');
   });
 });
+describe('streamed tool arguments', () => {
+  const claude = (event: Record<string, unknown>) =>
+    parseSessionLine(JSON.stringify({ type: 'stream_event', event }), 'claude');
+
+  it('reports the real arguments instead of an empty object', () => {
+    // A tool's input is empty at content_block_start and streams afterwards,
+    // so reporting at start produced `read({})` in the transcript.
+    claude({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'read', input: {} } });
+    claude({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"filePa' } });
+    claude({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'th":"src/index.ts"}' } });
+
+    const chunk = claude({ type: 'content_block_stop', index: 0 });
+    expect(chunk?.activity?.kind).toBe('tool');
+    expect(chunk?.activity?.label).toBe('read');
+    expect(chunk?.activity?.detail).toBe('{"filePath":"src/index.ts"}');
+  });
+
+  it('does not leak one tool block arguments into the next', () => {
+    claude({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'read', input: {} } });
+    claude({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":1}' } });
+    claude({ type: 'content_block_stop', index: 0 });
+
+    claude({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', name: 'glob', input: {} } });
+    claude({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"pattern":"src/**"}' } });
+
+    const chunk = claude({ type: 'content_block_stop', index: 1 });
+    expect(chunk?.activity?.detail).toBe('{"pattern":"src/**"}');
+  });
+
+  it('reports immediately when the input is already present', () => {
+    const chunk = claude({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', name: 'bash', input: { cmd: 'ls' } },
+    });
+    expect(chunk?.activity?.detail).toBe('{"cmd":"ls"}');
+  });
+
+  it('never reports a half-received argument object', () => {
+    claude({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'read', input: {} } });
+    claude({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"filePa' } });
+
+    // The block closes before the JSON is complete.
+    const chunk = claude({ type: 'content_block_stop', index: 0 });
+    expect(chunk?.activity?.label).toBe('read');
+    expect(chunk?.activity?.detail).toBe('{}');
+  });
+
+  it('formats the tool line with its arguments for display', () => {
+    expect(formatActivity({ kind: 'tool', label: 'read', detail: '{"filePath":"src/index.ts"}', status: 'started' })).toBe(
+      '\u23FA read({"filePath":"src/index.ts"})\n',
+    );
+  });
+});

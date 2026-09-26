@@ -83,6 +83,28 @@ function requestFromControlRequest(payload: Record<string, unknown>): ChatReques
   return undefined;
 }
 
+/**
+ * Tool arguments arrive as a stream of JSON fragments keyed by content block, so
+ * they are accumulated here and reported once the block closes. Emitting the
+ * tool at block start instead would always show `read({})`, because the input
+ * is not populated until the fragments arrive.
+ */
+const toolInputBuffer = new Map<number, string>();
+const toolNameBuffer = new Map<number, string>();
+
+function parsePartialJson(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  // Only report once the fragment is valid JSON, so a half-arrived object is
+  // never displayed as a broken argument list.
+  try {
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseClaude(payload: Record<string, unknown>): ProtocolChunk {
   const type = String(payload.type ?? '');
 
@@ -94,13 +116,35 @@ function parseClaude(payload: Record<string, unknown>): ProtocolChunk {
       if (text) return { text };
       const thinking = asText(delta.thinking);
       if (thinking) return { activity: { kind: 'reasoning', label: 'thinking', detail: oneLine(thinking) } };
+      if (String(delta.type ?? '') === 'input_json_delta') {
+        const index = Number(event.index ?? 0);
+        const fragment = asText(delta.partial_json);
+        if (fragment) toolInputBuffer.set(index, (toolInputBuffer.get(index) ?? '') + fragment);
+      }
       return {};
+    }
+    if (event.type === 'content_block_stop') {
+      const index = Number(event.index ?? 0);
+      const label = toolNameBuffer.get(index);
+      const raw = toolInputBuffer.get(index);
+      toolNameBuffer.delete(index);
+      toolInputBuffer.delete(index);
+      if (!label) return {};
+      // Fall back to the start-of-block input when no fragments were streamed.
+      return { activity: { kind: 'tool', label, detail: parsePartialJson(raw ?? '') ?? '{}', status: 'started' } };
     }
     if (event.type === 'content_block_start') {
       const block = (event.content_block ?? {}) as Record<string, unknown>;
       if (block.type === 'tool_use') {
         const name = asText(block.name) ?? 'tool';
-        return { activity: { kind: 'tool', label: name, detail: summarize(block.input), status: 'started' } };
+        // The input is usually empty at this point; it streams as
+        // input_json_delta fragments and is reported at content_block_stop.
+        toolNameBuffer.set(Number(event.index ?? 0), name);
+        if (block.input && Object.keys(block.input as object).length > 0) {
+          toolNameBuffer.delete(Number(event.index ?? 0));
+          return { activity: { kind: 'tool', label: name, detail: summarize(block.input), status: 'started' } };
+        }
+        return {};
       }
       if (block.type === 'thinking') {
         return { activity: { kind: 'reasoning', label: 'thinking' } };

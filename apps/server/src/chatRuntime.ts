@@ -50,7 +50,7 @@ export function formatActivity(activity: ProtocolActivity): string {
     if (activity.status === 'retry') return `↻ retry: ${activity.detail ?? 'provider unavailable'}\n`;
     return '';
   }
-  return `${activity.status === 'error' ? '!' : '·'} ${activity.label}${detail}\n`;
+  return `${activity.status === 'error' ? '!' : '\u2713'} ${activity.label}${detail}\n`;
 }
 
 export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions): Promise<TurnResult> {
@@ -97,7 +97,16 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
     }
   }
 
+  // A CLI reports an event both in its own output stream and through the
+  // runtime's activity channel, so the same line can arrive twice. Tracking the
+  // tail lets an exact repeat be dropped without hiding genuinely repeated
+  // content further up the transcript.
+  let tail = '';
+
   const append = (chunk: string, extra?: Record<string, unknown>) => {
+    if (chunk && chunk === tail) return;
+    tail = chunk.endsWith('\n') || !chunk ? '' : chunk;
+
     deps.db.appendChatMessageText(messageId, chunk);
     void deps.eventBus.emit({
       type: 'chat.assistant_output',

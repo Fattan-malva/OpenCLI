@@ -18,36 +18,96 @@ function agentMeta(agentId?: string) {
 }
 
 /**
- * Renders a message exactly as the agent produced it.
+ * One line of agent output, classified for styling only.
  *
- * Nothing is trimmed, collapsed or filtered, because a chat transcript that
- * silently drops indentation, blank lines or unknown lines is worse than no
- * formatting at all: code blocks and JSON stop being readable, and there is no
- * way to tell what was lost. A CLI's own full-screen TUI belongs in the
- * Terminal tab, which streams the raw PTY instead of this text.
+ * The text is always kept verbatim. Classification decides colour and an icon,
+ * never whether a line is shown, because dropping output the UI does not
+ * recognise makes a transcript quietly incomplete.
+ */
+type LineKind = 'tool' | 'thinking' | 'file' | 'retry' | 'error' | 'done' | 'text';
+
+function classifyLine(raw: string): { kind: LineKind; text: string } {
+  // Markers come from the server's own activity formatting.
+  const tool = raw.match(/^\u{23FA}\s*([^\s(]+)\s*(\([\s\S]*)?$/u);
+  if (tool) return { kind: 'tool', text: raw };
+
+  if (/^\u{2733}\s*thinking\b/u.test(raw)) return { kind: 'thinking', text: raw };
+  if (/^\u{270E}\s/u.test(raw)) return { kind: 'file', text: raw };
+  if (/^\u{21BB}\s/u.test(raw)) return { kind: 'retry', text: raw };
+  if (/^!\s/u.test(raw)) return { kind: 'error', text: raw };
+  if (/^\u{2713}\s/u.test(raw)) return { kind: 'done', text: raw };
+  return { kind: 'text', text: raw };
+}
+
+const LINE_STYLE: Record<LineKind, { text: string; icon?: string }> = {
+  tool: { text: 'text-sky-300' },
+  thinking: { text: 'text-purple-300/90 italic' },
+  file: { text: 'text-amber-300' },
+  retry: { text: 'text-amber-400/90' },
+  error: { text: 'text-rose-400' },
+  done: { text: 'text-emerald-400/90' },
+  text: { text: 'text-app-textStrong' },
+};
+
+/**
+ * Renders a message exactly as the agent produced it, while it streams.
+ *
+ * Nothing is trimmed, collapsed or dropped. Lines the UI recognises (tool calls,
+ * thinking, file edits, retries, errors) get colour and an icon so the names are
+ * easy to scan; everything else is shown verbatim. A CLI's own full-screen TUI
+ * belongs in the Terminal tab, which streams the raw PTY instead of this text.
  */
 function MessageOutput({ text, streaming }: { text: string; streaming: boolean }) {
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the newest output in view while a reply is still arriving.
+  useEffect(() => {
+    if (!streaming) return;
+    const el = endRef.current;
+    if (el) el.scrollIntoView({ block: 'end' });
+  }, [text, streaming]);
+
   if (!text) {
     return streaming ? (
       <div className="flex items-center gap-2 text-app-text text-xs">
-        <Icon name="loader-2" className="w-3 h-3 animate-spin" />
-        Working…
+        <span className="inline-block w-1.5 h-3.5 bg-emerald-400 animate-caret" />
+        Waiting for the first token…
       </div>
     ) : null;
   }
 
+  const lines = text.split('\n');
+
   return (
     <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2">
-      <pre className="font-mono text-[11.5px] leading-relaxed text-app-textStrong whitespace-pre-wrap break-words">
-        {text}
-        {streaming && <LiveCursor />}
-      </pre>
+      <div className="font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap break-words">
+        {lines.map((line, index) => {
+          const { kind, text: content } = classifyLine(line);
+          const style = LINE_STYLE[kind];
+          return (
+            <span key={index} className={style.text}>
+              {/* Only the thinking line blinks, and it blinks in place: the
+                  caret keyframes change opacity and nothing else. */}
+              {streaming && kind === 'thinking' && <LiveCursor />}
+              {content}
+              {'\n'}
+            </span>
+          );
+        })}
+      </div>
+      <div ref={endRef} />
     </div>
   );
 }
 
+/**
+ * Streaming caret.
+ *
+ * Blinks in place at a fixed size. The `animate-caret` keyframes only change
+ * opacity, so nothing scales or zooms while text is arriving.
+ */
 function LiveCursor() {
-  return <span className="inline-block w-1 h-3 ml-px align-middle bg-emerald-400 animate-pulse" />;
+  return <span className="inline-block w-[7px] h-[13px] ml-px align-text-bottom bg-emerald-400 animate-caret" />;
 }
 
 function MessageActions({ agentId }: { agentId?: string }) {
@@ -156,7 +216,12 @@ function AgentMessage({ message }: { message: ChatMessage }) {
           {message.agentId && <span className="text-[10px] font-mono text-app-text">{message.agentId}</span>}
           <ModeBadge message={message} />
           <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-medium ${chip.classes}`}>
-            <Icon name={chip.icon} className={`w-3 h-3 ${message.status === 'streaming' ? 'animate-spin' : ''}`} />
+            {/* A running turn shows a circular loader; the blink is reserved for
+                the thinking line so the two are never confused. */}
+            <Icon
+              name={chip.icon}
+              className={`w-3 h-3 ${message.status === 'streaming' ? 'animate-spin' : ''}`}
+            />
             {chip.label}
           </span>
           {message.taskId && (
