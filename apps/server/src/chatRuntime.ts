@@ -19,7 +19,7 @@ export interface AgentTurnOptions {
   text: string;
   taskId?: string;
   mode?: string;
-  model?: { provider: string; model: string };
+  model?: { provider: string; model: string; spec?: string };
   timeoutMs?: number;
   /** Confirmation policy for this turn; falls back to the global setting. */
   policy?: ConfirmationPolicy;
@@ -56,7 +56,10 @@ export function formatActivity(activity: ProtocolActivity): string {
 export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions): Promise<TurnResult> {
   const { projectId, threadId, adapterId, messageId, text, taskId, mode, model } = opts;
   const role = deps.db.getChatMessage(messageId)?.role ?? 'agent';
-  const requestedMode = mode ?? 'build';
+  // No assumed mode name: an adapter whose CLI publishes no modes is left on
+  // whatever it is already using rather than being told a mode that may not
+  // exist.
+  const requestedMode = mode ?? '';
   const policy = opts.policy ?? 'default';
 
   deps.db.mergeChatMessageMeta(messageId, { agent: opts.adapterName, mode: requestedMode });
@@ -84,8 +87,14 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
     if (!switched.ok) console.warn(`[chat] Could not set ${adapterId} to ${mode}: ${switched.error}`);
   }
   if (model) {
-    const applied = await setSessionModel(projectId, adapterId, model.provider, model.model);
-    if (!applied.ok) console.warn(`[chat] Could not set ${model.provider}/${model.model} on ${adapterId}: ${applied.error}`);
+    // Only switch when the CLI actually publishes this model. Sending a spec it
+    // does not know makes it answer "Model not found" instead of running, so it
+    // is better to leave the session on the CLI's own configured default.
+    const target = model.spec ?? `${model.provider}/${model.model}`;
+    const applied = await setSessionModel(projectId, adapterId, model.provider, model.model, model.spec);
+    if (!applied.ok) {
+      console.warn(`[chat] Could not set ${target} on ${adapterId}: ${applied.error}`);
+    }
   }
 
   const append = (chunk: string, extra?: Record<string, unknown>) => {

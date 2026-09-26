@@ -338,14 +338,22 @@ interface PromptTarget {
 
 export interface PromptOverrides {
   mode?: string;
-  model?: { provider: string; model: string };
+  model?: { provider: string; model: string; spec?: string };
 }
 
 function promptBody(text: string, overrides: PromptOverrides): Record<string, unknown> {
   const body: Record<string, unknown> = { parts: [{ type: 'text', text }] };
   if (overrides.mode) body.agent = overrides.mode;
   if (overrides.model?.provider && overrides.model.model) {
-    body.model = { providerID: overrides.model.provider, modelID: overrides.model.model };
+    // Both runtimes express a model as `provider/model` and split on the FIRST
+    // slash: `kilo/kilo-auto/free` is provider `kilo`, model `kilo-auto/free`.
+    // Splitting on the last slash instead yields `kilo/kilo-auto` + `free`,
+    // which the CLI rejects with "Model not found".
+    const spec = overrides.model.spec ?? `${overrides.model.provider}/${overrides.model.model}`;
+    const cut = spec.indexOf('/');
+    const providerID = cut > 0 ? spec.slice(0, cut) : spec;
+    const modelID = cut > 0 ? spec.slice(cut + 1) : spec;
+    body.model = { providerID, modelID, id: modelID };
   }
   return body;
 }
@@ -647,16 +655,22 @@ async function listRemoteAgents(baseUrl: string): Promise<Array<{ id: string; na
   return [];
 }
 
-async function remoteConfigModel(baseUrl: string): Promise<{ provider: string; model: string } | undefined> {
+async function remoteConfigModel(baseUrl: string): Promise<{ provider: string; model: string; spec: string } | undefined> {
   for (const path of ['/api/config', '/config', '/global/config', '/api/global/config']) {
     try {
       const response = await requestJson(baseUrl + path, {}, 5000);
       if (!response.ok) continue;
       const raw = response.data?.data ?? response.data;
-      const spec = typeof raw?.model === 'string' ? raw.model : '';
-      const index = spec.indexOf('/');
-      if (index > 0 && spec.slice(index + 1)) {
-        return { provider: spec.slice(0, index), model: spec.slice(index + 1) };
+      const spec = typeof raw?.model === 'string' ? raw.model.trim() : '';
+      // Keep the spec whole. Splitting it here and rejoining it later is how
+      // prefixes get lost, and the CLI then reports "Model not found".
+      if (spec) {
+        const index = spec.indexOf('/');
+        return {
+          provider: index > 0 ? spec.slice(0, index) : spec,
+          model: index > 0 ? spec.slice(index + 1) : spec,
+          spec,
+        };
       }
     } catch {
       // Try the next compatibility endpoint.
@@ -703,7 +717,14 @@ async function createRemoteSession(entry: SessionEntry): Promise<void> {
   const body: Record<string, unknown> = {};
   if (activeAgent) body.agent = activeAgent.id;
   if (configuredModel) {
-    body.model = { providerID: configuredModel.provider, id: configuredModel.model };
+    // Split on the first slash: the runtimes define a model as
+    // `provider/model`, so `kilo/kilo-auto/free` is provider `kilo` plus model
+    // `kilo-auto/free`.
+    const spec = configuredModel.spec;
+    const cut = spec.indexOf('/');
+    const providerID = cut > 0 ? spec.slice(0, cut) : spec;
+    const modelID = cut > 0 ? spec.slice(cut + 1) : spec;
+    body.model = { providerID, id: modelID, modelID };
   }
 
   let created: any;
@@ -1087,29 +1108,34 @@ export async function setSessionModel(
   adapterId: string,
   provider: string,
   model: string,
+  spec?: string,
 ): Promise<{ ok: boolean; output?: string; error?: string }> {
   const entry = SESSIONS.get(key(projectId, adapterId));
   if (!entry || !alive(entry)) return { ok: false, error: 'Session not running' };
 
+  // Prefer the exact spec the CLI published. Rebuilding `provider/model` drops
+  // prefixes the CLI requires and it answers "model not found".
+  const target = spec ?? `${provider}/${model}`;
+
   if (SERVE_ADAPTERS.has(adapterId)) {
-    const remote = await postSessionRuntime(entry, 'model', { model: { providerID: provider, id: model } });
+    const remote = await postSessionRuntime(entry, 'model', { model: target });
     if (remote.ok) {
       entry.activeProvider = provider;
       entry.activeModel = model;
-      return { ok: true, output: `Session model switched to ${provider}/${model}` };
+      return { ok: true, output: `Session model switched to ${target}` };
     }
   }
 
   if (!entry.child?.stdin) return { ok: false, error: 'Process stdin unavailable' };
   try {
     if (adapterId === 'claude') {
-      entry.child.stdin.write(JSON.stringify({ type: 'config', model: `${provider}/${model}` }) + '\\n');
+      entry.child.stdin.write(JSON.stringify({ type: 'config', model: target }) + '\n');
     } else {
-      entry.child.stdin.write(`/models ${provider}/${model}\\n`);
+      entry.child.stdin.write(`/models ${target}\n`);
     }
     entry.activeProvider = provider;
     entry.activeModel = model;
-    return { ok: true, output: `Sent model switch to ${provider}/${model}` };
+    return { ok: true, output: `Sent model switch to ${target}` };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? 'Failed to switch session model' };
   }

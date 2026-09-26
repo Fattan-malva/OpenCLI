@@ -7,6 +7,8 @@ import { runAgentTurn, type ChatRuntimeDeps } from './chatRuntime.js';
 import { assignDefaultAgents, buildPlannerPrompt, parsePlannerDecision } from './planner.js';
 import { resolvedConfirmationPolicy, resolvedInteractionMode } from './settings.js';
 import { refreshWorkflow, type WorkflowRuntime } from './workflow.js';
+import { getManifest, probeCapabilities } from './cli.js';
+import { primaryModes } from '@opencli/discovery';
 
 export interface ChatDeps extends ChatRuntimeDeps {
   scheduler: Scheduler;
@@ -148,34 +150,85 @@ function agentMessage(
   return message;
 }
 
+/**
+ * Primary modes an adapter can be driven in, best source first.
+ *
+ * A live session knows its own agents best; otherwise the adapter's manifest is
+ * asked directly. Only when the CLI publishes nothing does this stay empty,
+ * because inventing mode names would produce commands the CLI rejects.
+ */
 async function agentModes(projectId: string, adapterId: string): Promise<string[]> {
   const runtimeModes = await getSessionAgentModes(projectId, adapterId);
   if (runtimeModes.length > 0) return runtimeModes.map((mode) => mode.id);
-  return ['build', 'plan'];
+
+  try {
+    const manifest = await getManifest(adapterId);
+    const primary = primaryModes(manifest?.modes ?? []);
+    if (primary.length > 0) return primary.map((mode) => mode.id);
+  } catch {
+    /* fall through to an empty list */
+  }
+  return [];
 }
 
-function pickPlannerAdapter(projectId: string, defaultAgent: string | undefined, running: string[]): string {
-  if (defaultAgent && running.includes(defaultAgent)) return defaultAgent;
-  return running[0];
+/** The mode a chat turn should use, never a hardcoded name. */
+async function resolveAdapterMode(
+  projectId: string,
+  adapterId: string,
+  requested?: string,
+): Promise<string | undefined> {
+  if (requested) return requested;
+  const modes = await agentModes(projectId, adapterId);
+  return modes[0];
 }
 
-function routingModel(
+/**
+ * Model selection for a mode, with the exact CLI spec resolved.
+ *
+ * A routing stored before the spec column existed only has provider + model,
+ * and concatenating those produces something the CLI rejects
+ * (`default/big-pickle` instead of `opencode/big-pickle`). So when the stored row
+ * has no spec, it is looked up in the adapter's live catalog before use. This
+ * makes the lookup self-healing rather than depending on stored state.
+ */
+async function routingModel(
   db: OpenCLIRepository,
   projectId: string,
   adapterId: string,
   mode: string,
-): { provider: string; model: string } | undefined {
-  const routing = db.listModelRoutings(projectId)[adapterId] ?? {};
-  return routing[mode] ?? routing.build ?? routing.plan;
-}
+): Promise<{ provider: string; model: string; spec?: string } | undefined> {
+  const stored = db.listModelRoutings(projectId)[adapterId]?.[mode];
+  if (!stored) return undefined;
+  if (stored.spec) return stored;
 
-function createWorkflowForPlan(
+  try {
+    const capabilities = await probeCapabilities(adapterId);
+    const spec = capabilities.specs?.[`${stored.provider}/${stored.model}`];
+    if (spec) return { ...stored, spec };
+  } catch {
+    /* fall through */
+  }
+
+  // The selection cannot be expressed in a form the CLI is guaranteed to
+  // accept, so it is not forced. Sending `default/big-pickle` where the CLI
+  // expects `opencode/big-pickle` only produces "Model not found"; deferring to
+  // the CLI's own configured model is better than failing the turn.
+  return undefined;
+}/**
+ * Turns planner steps into a workflow of tasks.
+ *
+ * `assignable` is the pool a step may be given to. Plan mode passes only the
+ * chat adapter so the whole plan stays with one agent; Agent mode passes every
+ * running adapter so the graph spreads across the team.
+ */
+export function createWorkflowForPlan(
   deps: ChatDeps,
   thread: ChatThread,
   userText: string,
   steps: PlanStep[],
-  running: string[],
+  assignable: string[],
   start: boolean,
+  defaultMode?: string,
 ): { workflowId: string; taskIds: string[] } {
   const workflow = deps.db.createWorkflow({
     projectId: thread.projectId,
@@ -191,11 +244,16 @@ function createWorkflowForPlan(
     payload: { workflowId: workflow.id, name: workflow.name, source: 'chat', threadId: thread.id },
   });
 
-  const assigned = assignDefaultAgents(steps, running);
+  const assigned = assignDefaultAgents(steps, assignable);
   const created: string[] = [];
 
   assigned.forEach((step, index) => {
-    const agentId = step.agentId && running.includes(step.agentId) ? step.agentId : running[index % running.length];
+    // Prefer the planner's own choice, then spread across the assignable set so
+    // parallel steps land on different adapters instead of piling onto one.
+    const agentId =
+      step.agentId && assignable.includes(step.agentId)
+        ? step.agentId
+        : assignable[index % assignable.length];
     const task = deps.db.createTask({
       projectId: thread.projectId,
       workflowId: workflow.id,
@@ -207,7 +265,7 @@ function createWorkflowForPlan(
         .map((dependency) => created[dependency])
         .filter((id): id is string => Boolean(id)),
       agentId,
-      modeId: step.modeId ?? 'build',
+      modeId: step.modeId ?? defaultMode,
       fileScopes: step.fileScopes ?? [],
       kind: 'chat',
       retryCount: 0,
@@ -238,69 +296,6 @@ function createWorkflowForPlan(
   return { workflowId: workflow.id, taskIds: created };
 }
 
-export function createWorkflowForBroadcast(
-  deps: ChatDeps,
-  thread: ChatThread,
-  userText: string,
-  running: string[],
-  modes: Record<string, string>,
-): { workflowId: string; taskIds: string[] } {
-  const workflow = deps.db.createWorkflow({
-    projectId: thread.projectId,
-    name: threadTitle(userText),
-    description: 'Broadcast run: the same prompt was sent to every running adapter in read-only plan mode.',
-    status: 'draft',
-  });
-
-  void deps.eventBus.emit({
-    type: 'workflow.created',
-    projectId: thread.projectId,
-    workflowId: workflow.id,
-    payload: { workflowId: workflow.id, name: workflow.name, source: 'chat', threadId: thread.id },
-  });
-
-  const taskIds = running.map((adapterId, index) => {
-    const task = deps.db.createTask({
-      projectId: thread.projectId,
-      workflowId: workflow.id,
-      title: `${adapterId}: ${threadTitle(userText)}`,
-      description: userText,
-      status: 'pending',
-      priority: running.length - index,
-      dependencies: [],
-      agentId: adapterId,
-      modeId: modes[adapterId] ?? 'plan',
-      fileScopes: [],
-      kind: 'chat',
-      broadcast: true,
-      retryCount: 0,
-      maxRetries: 0,
-    });
-
-    agentMessage(deps, thread, {
-      role: 'agent',
-      adapterId,
-      taskId: task.id,
-      label: `Broadcast: ${adapterId}`,
-    });
-
-    void deps.eventBus.emit({
-      type: 'task.created',
-      projectId: thread.projectId,
-      workflowId: workflow.id,
-      taskId: task.id,
-      agentId: adapterId,
-      payload: { workflowId: workflow.id, taskId: task.id, title: task.title, agentId: adapterId, source: 'chat', broadcast: true },
-    });
-
-    return task.id;
-  });
-
-  deps.db.updateWorkflow(workflow.id, { status: 'running' });
-  deps.db.updateChatThread(thread.id, { workflowId: workflow.id });
-
-  return { workflowId: workflow.id, taskIds };
-}
 
 export interface SendChatOptions {
   projectId: string;
@@ -391,6 +386,23 @@ export async function sendChatMessage(deps: ChatDeps, options: SendChatOptions):
   };
 }
 
+/**
+ * Resolves which single adapter a chat message is addressed to.
+ *
+ * Precedence: an explicit target, then the thread's remembered chat adapter,
+ * then the first running adapter. A mention still wins because the user typed
+ * it deliberately.
+ */
+function resolveChatAdapter(
+  thread: ChatThread,
+  running: string[],
+  requested?: string,
+): string | undefined {
+  if (requested && running.includes(requested)) return requested;
+  if (thread.chatAdapterId && running.includes(thread.chatAdapterId)) return thread.chatAdapterId;
+  return running[0];
+}
+
 async function processChatMessage(
   deps: ChatDeps,
   input: {
@@ -411,50 +423,85 @@ async function processChatMessage(
   const interactionMode = resolvedInteractionMode(input.interactionMode);
   const confirmationPolicy = resolvedConfirmationPolicy(input.confirmationPolicy);
 
-  if (input.targetAdapterId) {
-    const adapterId = input.targetAdapterId;
-    if (!running.includes(adapterId)) {
-      systemMessage(deps, thread, `${adapterId} is not running. Start its session on the Adapters page first.`);
-      return;
-    }
+  if (running.length === 0) {
+    systemMessage(
+      deps,
+      thread,
+      'No adapter session is running. Start one on the Adapters page first, then send your message again.',
+    );
+    return;
+  }
+
+  // Exactly one adapter owns this conversation. "Active" (many) and "chat
+  // target" (one) are deliberately different concepts.
+  const adapterId = resolveChatAdapter(thread, running, input.targetAdapterId);
+  if (!adapterId) {
+    systemMessage(deps, thread, 'No running adapter is available to chat with.');
+    return;
+  }
+
+  const adapterMode = await resolveAdapterMode(projectId, adapterId, input.mode);
+
+  deps.db.updateChatThread(thread.id, {
+    chatAdapterId: adapterId,
+    ...(adapterMode ? { adapterMode } : {}),
+    interactionMode,
+  });
+
+  // An explicit target that is not running is a user mistake worth reporting,
+  // rather than silently rerouting to somebody else.
+  if (input.targetAdapterId && !running.includes(input.targetAdapterId)) {
+    systemMessage(
+      deps,
+      thread,
+      `${input.targetAdapterId} is not running. Start its session on the Adapters page first.`,
+    );
+    return;
+  }
+
+  // --- Ask: one adapter answers, nothing is orchestrated, no task is created.
+  if (interactionMode === 'ask') {
     const message = agentMessage(deps, thread, { role: 'agent', adapterId });
-    const directMode = input.mode ?? 'build';
+    deps.db.updateChatThread(thread.id, { planStatus: 'none' });
     await runAgentTurn(deps, {
       projectId,
       threadId: thread.id,
       adapterId,
       messageId: message.id,
       text: prompt,
-      mode: directMode,
-      model: routingModel(deps.db, projectId, adapterId, directMode),
+      mode: adapterMode ?? '',
+      model: adapterMode ? await routingModel(deps.db, projectId, adapterId, adapterMode) : undefined,
       policy: confirmationPolicy,
     });
     return;
   }
 
-  if (running.length === 0) {
-    systemMessage(deps, thread, 'No adapter session is running. Start one on the Adapters page first, then send your task again.');
-    return;
-  }
-
-  if (interactionMode === 'ask') {
-    await broadcastPrompt(deps, thread, project, prompt, running);
-    return;
-  }
+  // --- Plan and Agent both go through the planner, run by the chat adapter
+  // itself. No other adapter participates in producing the plan.
+  deps.db.updateChatThread(thread.id, { planStatus: 'generating' });
 
   const existingWorkflow = thread.workflowId ? deps.db.getWorkflow(thread.workflowId) : undefined;
   if (existingWorkflow && ['draft', 'running', 'paused'].includes(existingWorkflow.status)) {
     const start = interactionMode === 'agent' && existingWorkflow.status === 'draft';
-    await appendChatTodo(deps, thread, project, prompt, running, start);
+    await appendChatTodo(deps, thread, project, prompt, running, start, adapterId);
     return;
   }
 
-  const { decision, plannerMessage } = await planDecision(deps, thread, project, prompt, running, confirmationPolicy);
+  const { decision, plannerMessage } = await planDecision(
+    deps,
+    thread,
+    project,
+    prompt,
+    running,
+    confirmationPolicy,
+    adapterId,
+  );
   const steps = decision.steps ?? [];
   if (steps.length === 0) {
+    deps.db.updateChatThread(thread.id, { planStatus: 'none' });
     deps.db.updateChatMessage(plannerMessage.id, {
       status: 'error',
-      text: `${plannerMessage.text}\n\nCould not read a valid plan from this reply. Ask the planner again or mention an agent directly (for example @opencode).`,
+      text: `${plannerMessage.text}\n\nCould not read a valid plan from this reply. Ask again, or mention an adapter directly (for example @${adapterId}).`,
     });
     void deps.eventBus.emit({
       type: 'chat.assistant_failed',
@@ -466,7 +513,10 @@ async function processChatMessage(
   }
 
   const start = interactionMode === 'agent';
-  const { workflowId, taskIds } = createWorkflowForPlan(deps, thread, prompt, steps, running, start);
+  // Plan keeps every step on the chat adapter. Agent lets the router spread the
+  // graph across the active adapters, which is the only multi-adapter path.
+  const assignable = start ? running : [adapterId];
+  const { workflowId, taskIds } = createWorkflowForPlan(deps, thread, prompt, steps, assignable, start, adapterMode);
 
   deps.db.appendChatMessageText(plannerMessage.id, `\n\nWorkflow created with ${taskIds.length} step${taskIds.length === 1 ? '' : 's'}.`);
   void deps.eventBus.emit({
@@ -478,6 +528,7 @@ async function processChatMessage(
   });
 
   if (!start) {
+    deps.db.updateChatThread(thread.id, { planStatus: 'ready' });
     void deps.eventBus.emit({
       type: 'chat.plan_ready',
       projectId,
@@ -487,15 +538,16 @@ async function processChatMessage(
     systemMessage(
       deps,
       thread,
-      `Plan ready with ${taskIds.length} step${taskIds.length === 1 ? '' : 's'}. Nothing has run yet — review the todos on the Workflow board and execute, or switch to Agent mode to run automatically.`,
+      `Plan ready with ${taskIds.length} step${taskIds.length === 1 ? '' : 's'}, all assigned to ${adapterId}. Nothing has run yet — review the todos on the Workflow board and execute, or switch to Agent mode to route them across your active adapters.`,
     );
     return;
   }
 
+  deps.db.updateChatThread(thread.id, { planStatus: 'executing' });
   deps.scheduler.loadTasks(deps.db.listWorkflowTasks(workflowId));
-  const started = await deps.scheduler.startWorkflow(workflowId);
-  if (!started.started) {
-    systemMessage(deps, thread, `The plan was created but could not start: ${started.errors.join('; ')}`);
+  const startedResult = await deps.scheduler.startWorkflow(workflowId);
+  if (!startedResult.started) {
+    systemMessage(deps, thread, `The plan was created but could not start: ${startedResult.errors.join('; ')}`);
     return;
   }
 
@@ -515,15 +567,20 @@ async function planDecision(
   prompt: string,
   running: string[],
   confirmationPolicy: ConfirmationPolicy,
+  plannerAdapterId: string,
 ): Promise<{ decision: PlannerDecision; plannerMessage: ChatMessage }> {
-  const plannerAdapterId = pickPlannerAdapter(project.id, undefined, running);
   const plannerMessage = agentMessage(deps, thread, {
     role: 'planner',
     adapterId: plannerAdapterId,
     label: `Planning with ${plannerAdapterId}...`,
   });
 
-  await setSessionMode(project.id, plannerAdapterId, 'plan');
+  // The planner is the chat adapter itself, not "whoever happens to be first",
+  // so the plan is produced by the agent the user is talking to.
+  const planningMode = (await agentModes(project.id, plannerAdapterId)).includes('plan')
+    ? 'plan'
+    : await resolveAdapterMode(project.id, plannerAdapterId);
+  if (planningMode) await setSessionMode(project.id, plannerAdapterId, planningMode);
 
   const roster = await Promise.all(
     running.map(async (adapterId) => ({
@@ -545,8 +602,8 @@ async function planDecision(
     adapterId: plannerAdapterId,
     messageId: plannerMessage.id,
     text: plannerPrompt,
-    mode: 'plan',
-    model: routingModel(deps.db, project.id, plannerAdapterId, 'plan'),
+    mode: planningMode ?? '',
+    model: planningMode ? await routingModel(deps.db, project.id, plannerAdapterId, planningMode) : undefined,
     policy: confirmationPolicy,
   });
 
@@ -581,6 +638,7 @@ async function appendChatTodo(
   userText: string,
   running: string[],
   start: boolean,
+  preferredAdapterId?: string,
 ): Promise<void> {
   if (!thread.workflowId) return;
   const workflow = deps.db.getWorkflow(thread.workflowId);
@@ -589,7 +647,12 @@ async function appendChatTodo(
   const tasks = deps.db.listWorkflowTasks(workflow.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const lastTask = tasks[tasks.length - 1];
   const dependencies = lastTask ? [lastTask.id] : [];
-  const agentId = leastBusyAdapter(deps, thread.projectId, running);
+  // Follow the conversation's adapter when it is still available, so a thread
+  // keeps talking to the same agent; otherwise spread the extra work.
+  const agentId =
+    preferredAdapterId && running.includes(preferredAdapterId)
+      ? preferredAdapterId
+      : leastBusyAdapter(deps, thread.projectId, running);
   const title = threadTitle(userText);
 
   const task = deps.db.createTask({
@@ -601,7 +664,7 @@ async function appendChatTodo(
     priority: Math.max(1, lastTask ? lastTask.priority - 1 : 1),
     dependencies,
     agentId,
-    modeId: 'build',
+    modeId: thread.adapterMode,
     fileScopes: [],
     kind: 'chat',
     retryCount: 0,
@@ -696,39 +759,3 @@ export async function executeChatPlan(
   return { started: true, workflowId: workflow.id };
 }
 
-async function broadcastPrompt(
-  deps: ChatDeps,
-  thread: ChatThread,
-  project: { id: string; name: string; path: string },
-  prompt: string,
-  running: string[],
-): Promise<void> {
-  const modes = new Map<string, string>();
-  for (const adapterId of running) {
-    const available = await agentModes(project.id, adapterId);
-    modes.set(adapterId, available.includes('plan') ? 'plan' : available[0] ?? 'plan');
-  }
-
-  const { workflowId, taskIds } = createWorkflowForBroadcast(
-    deps,
-    thread,
-    prompt,
-    running,
-    Object.fromEntries(modes),
-  );
-
-  deps.scheduler.loadTasks(deps.db.listWorkflowTasks(workflowId));
-  const started = await deps.scheduler.startWorkflow(workflowId);
-  if (!started.started) {
-    systemMessage(deps, thread, `The broadcast could not start: ${started.errors.join('; ')}`);
-    return;
-  }
-
-  void deps.eventBus.emit({
-    type: 'workflow.started',
-    projectId: project.id,
-    workflowId,
-    payload: { workflowId, source: 'chat', threadId: thread.id },
-  });
-  refreshWorkflow(deps.workflowRuntime, workflowId);
-}

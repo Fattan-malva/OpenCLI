@@ -17,155 +17,31 @@ function agentMeta(agentId?: string) {
   return adapterMeta(agentId);
 }
 
-type ActivityRow =
-  | { type: 'text'; text: string }
-  | { type: 'tool'; name: string; detail: string }
-  | { type: 'thought'; text: string }
-  | { type: 'file'; file: string; range?: string }
-  | { type: 'retry'; text: string }
-  | { type: 'error'; text: string }
-  | { type: 'approval'; text: string };
-
-function parseActivity(text: string): ActivityRow[] {
-  const rows: ActivityRow[] = [];
-  for (const raw of text.replace(/\r/g, '').split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    const tool = line.match(/^⏺\s+([^()\s]+)(?:\((.*)\))?$/);
-    if (tool) {
-      rows.push({ type: 'tool', name: tool[1], detail: (tool[2] ?? '').trim() });
-      continue;
-    }
-    const file = line.match(/^✎\s+(?:modified|created|deleted|changed)\s+(.+)$/i);
-    if (file) {
-      const match = file[1].match(/^(.*?)\s+\(lines?\s+(\d+)\s*-\s*(\d+)\)$/);
-      rows.push(
-        match
-          ? { type: 'file', file: match[1], range: `lines ${match[2]}-${match[3]}` }
-          : { type: 'file', file: file[1].replace(/\s+\(line\s+\d+\)$/, '') },
-      );
-      continue;
-    }
-    const thought = line.match(/^✳\s+(?:thinking\s+)?(.*)$/);
-    if (thought) {
-      rows.push({ type: 'thought', text: thought[1] });
-      continue;
-    }
-    if (/^\[allow-all\]/i.test(line)) {
-      rows.push({ type: 'approval', text: line });
-      continue;
-    }
-    if (line.startsWith('↻')) {
-      rows.push({ type: 'retry', text: line.slice(1).trim() });
-      continue;
-    }
-    if (line.startsWith('!')) {
-      rows.push({ type: 'error', text: line.slice(1).trim() });
-      continue;
-    }
-    rows.push({ type: 'text', text: line });
+/**
+ * Renders a message exactly as the agent produced it.
+ *
+ * Nothing is trimmed, collapsed or filtered, because a chat transcript that
+ * silently drops indentation, blank lines or unknown lines is worse than no
+ * formatting at all: code blocks and JSON stop being readable, and there is no
+ * way to tell what was lost. A CLI's own full-screen TUI belongs in the
+ * Terminal tab, which streams the raw PTY instead of this text.
+ */
+function MessageOutput({ text, streaming }: { text: string; streaming: boolean }) {
+  if (!text) {
+    return streaming ? (
+      <div className="flex items-center gap-2 text-app-text text-xs">
+        <Icon name="loader-2" className="w-3 h-3 animate-spin" />
+        Working…
+      </div>
+    ) : null;
   }
-  return rows;
-}
-
-function ActivityOutput({ text, streaming }: { text: string; streaming: boolean }) {
-  const rows = useMemo(() => parseActivity(text), [text]);
-  const lastIdx = rows.length - 1;
 
   return (
-    <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-96">
-      {rows.map((row, index) => {
-        const live = streaming && index === lastIdx;
-        const key = `${row.type}-${index}`;
-
-        if (row.type === 'text') {
-          return (
-            <div key={key} className="text-app-textStrong whitespace-pre-wrap break-words">
-              {row.text}
-              {live && <LiveCursor />}
-            </div>
-          );
-        }
-
-        if (row.type === 'thought') {
-          return (
-            <div key={key} className={`flex items-start gap-1.5 ${live ? 'animate-pulse' : ''}`}>
-              <Icon name="cpu" className="w-3 h-3 mt-[3px] shrink-0 text-purple-300/80" />
-              <span className="text-purple-300/80 uppercase tracking-wide text-[10px] shrink-0">Thought</span>
-              <span className="text-purple-300/90 italic whitespace-pre-wrap break-words min-w-0">{row.text || 'thinking…'}</span>
-            </div>
-          );
-        }
-
-        if (row.type === 'tool') {
-          return (
-            <div key={key} className="flex items-center gap-1.5">
-              <Icon name="terminal" className="w-3 h-3 shrink-0 text-sky-300" />
-              <span className="text-sky-300 font-medium">{row.name}</span>
-              {row.detail && row.detail !== row.name && (
-                <span className="text-app-text/70 truncate min-w-0">{row.detail}</span>
-              )}
-              <span className="ml-auto shrink-0">
-                {live ? (
-                  <Icon name="loader-2" className="w-3 h-3 text-sky-300 animate-spin" />
-                ) : streaming ? (
-                  <Icon name="circle" className="w-2 h-2 text-app-text/50" />
-                ) : (
-                  <Icon name="check-circle-2" className="w-3 h-3 text-emerald-400/80" />
-                )}
-              </span>
-            </div>
-          );
-        }
-
-        if (row.type === 'file') {
-          return (
-            <div key={key} className={`flex items-center gap-1.5 ${live ? 'animate-pulse' : ''}`}>
-              <Icon name="edit-2" className={`w-3 h-3 shrink-0 ${live ? 'text-amber-300' : 'text-amber-300/80'}`} />
-              <span className="text-amber-300 truncate min-w-0">{row.file}</span>
-              {row.range && (
-                <span className="shrink-0 px-1 py-px rounded border border-amber-500/25 bg-amber-500/10 text-amber-300/90 text-[10px]">
-                  {row.range}
-                </span>
-              )}
-            </div>
-          );
-        }
-
-        if (row.type === 'retry') {
-          return (
-            <div key={key} className="flex items-center gap-1.5">
-              <Icon name="refresh-cw" className="w-3 h-3 shrink-0 text-amber-400/90" />
-              <span className="text-amber-400/90 whitespace-pre-wrap break-words">{row.text}</span>
-            </div>
-          );
-        }
-
-        if (row.type === 'error') {
-          return (
-            <div key={key} className="flex items-start gap-1.5">
-              <Icon name="alert-circle" className="w-3 h-3 mt-[3px] shrink-0 text-rose-400" />
-              <span className="text-rose-400 whitespace-pre-wrap break-words min-w-0">{row.text}</span>
-            </div>
-          );
-        }
-
-        return (
-          <div key={key} className="pl-[18px] -indent-[18px]">
-            <span className="inline-flex items-center gap-1.5 px-1.5 py-px rounded border border-sky-500/20 bg-sky-500/10 text-sky-300/90">
-              <Icon name="check" className="w-2.5 h-2.5" />
-              <span className="whitespace-pre-wrap break-words">{row.text}</span>
-            </span>
-          </div>
-        );
-      })}
-      {streaming && rows.length === 0 && (
-        <div className="flex items-center gap-2 text-app-text">
-          <Icon name="loader-2" className="w-3 h-3 animate-spin" />
-          Working…
-        </div>
-      )}
+    <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2">
+      <pre className="font-mono text-[11.5px] leading-relaxed text-app-textStrong whitespace-pre-wrap break-words">
+        {text}
+        {streaming && <LiveCursor />}
+      </pre>
     </div>
   );
 }
@@ -290,7 +166,7 @@ function AgentMessage({ message }: { message: ChatMessage }) {
 
         {message.text && (
           <div className="mt-2">
-            <ActivityOutput text={message.text} streaming={message.status === 'streaming'} />
+            <MessageOutput text={message.text} streaming={message.status === 'streaming'} />
           </div>
         )}
 
@@ -363,8 +239,10 @@ export function ChatThread() {
           <Icon name="message-square-dashed" className="w-9 h-9 mx-auto mb-3 text-app-text" />
           <div className="text-sm font-medium text-app-textStrong">Start a conversation</div>
           <div className="text-xs text-app-text mt-1.5">
-            Give a prompt or a task below. OpenCLI asks the planner agent to split it into steps, then every
-            running adapter works on its own step and streams the result back here.
+            Pick one adapter to talk to. <span className="text-app-textStrong">Ask</span> answers with that
+            adapter alone, <span className="text-app-textStrong">Plan</span> turns your request into a todo list
+            you review first, and <span className="text-app-textStrong">Agent</span> plans and then routes the steps
+            across every active adapter.
           </div>
           {running.length === 0 && (
             <div className="mt-4 text-xs text-amber-400 border border-amber-500/20 bg-amber-500/5 rounded-lg px-3 py-2 inline-block">
@@ -379,6 +257,26 @@ export function ChatThread() {
   return (
     <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
       <div className="max-w-3xl mx-auto flex flex-col gap-5">
+        {/* This conversation is addressed to exactly one adapter, even when
+            several are active and available to a workflow. */}
+        {activeThread.chatAdapterId && (
+          <div className="flex items-center gap-2 text-[11px] text-app-text">
+            <Icon name="bot" className="w-3.5 h-3.5" />
+            <span>Chatting with</span>
+            <span className="text-app-textStrong font-medium">{activeThread.chatAdapterId}</span>
+            {activeThread.adapterMode && (
+              <>
+                <span className="text-app-text">in</span>
+                <span className="font-mono text-app-primary">{activeThread.adapterMode}</span>
+              </>
+            )}
+            {activeThread.planStatus && activeThread.planStatus !== 'none' && (
+              <span className="ml-auto px-1.5 py-0.5 rounded bg-app-border text-app-text">
+                plan: {activeThread.planStatus}
+              </span>
+            )}
+          </div>
+        )}
         {draftPlan && <PlanBanner workflowId={draftPlan.id} />}
         {chatMessages.map((message) => {
           if (message.role === 'user') {

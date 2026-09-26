@@ -141,6 +141,8 @@ export interface AdapterCapabilities {
   subagents: AdapterMode[];
   providers: string[];
   models: Record<string, string[]>;
+  /** `provider/model` to the exact spec the CLI printed, for sending back. */
+  specs: Record<string, string>;
   modeModels: Record<string, ModeModelConfig>;
   current: {
     provider: string;
@@ -245,9 +247,18 @@ export interface ChatThread {
   projectId: string;
   title: string;
   workflowId?: string;
+  /** The single adapter this conversation talks to. */
+  chatAdapterId?: string;
+  /** That adapter's own primary mode, discovered from the CLI. */
+  adapterMode?: string;
+  interactionMode?: InteractionMode;
+  planStatus?: PlanStatus;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Lifecycle of the plan attached to a conversation. */
+export type PlanStatus = 'none' | 'generating' | 'ready' | 'approved' | 'executing' | 'completed';
 
 export interface ChatMessage {
   id: string;

@@ -5,7 +5,7 @@ import { AdapterIcon } from '../components/AdapterIcon';
 import { api } from '../lib/api';
 import type { AdapterCapabilities } from '../lib/types';
 
-type RuntimeRouting = Record<string, Record<string, { provider: string; model: string }>>;
+type RuntimeRouting = Record<string, Record<string, { provider: string; model: string; spec?: string }>>;
 
 export function ModelsPage({ active }: { active: boolean }) {
   const { adapters, sessions, activeProject, showToast, setSessions } = useStore();
@@ -67,13 +67,18 @@ export function ModelsPage({ active }: { active: boolean }) {
     }
 
     setLoading((l) => ({ ...l, [adapterId]: true }));
+    // Send the exact spec the CLI published. Rebuilding provider/model here
+    // drops prefixes the CLI requires, and it answers "model not found" on the
+    // next turn.
+    const spec = caps[adapterId]?.specs?.[`${provider}/${model}`];
     try {
-      const result = await api.setModelRouting(activeProject.id, adapterId, modeId, provider, model);
+      const result = await api.setModelRouting(activeProject.id, adapterId, modeId, provider, model, spec);
+      const stored = result.routing?.spec ?? spec;
       setRouting((current) => ({
         ...current,
         [adapterId]: {
           ...(current[adapterId] ?? {}),
-          [modeId]: { provider, model },
+          [modeId]: { provider, model, spec: stored },
         },
       }));
       setSessions(sessions.map((session) =>
@@ -82,24 +87,21 @@ export function ModelsPage({ active }: { active: boolean }) {
           : session,
       ));
 
+      const label = stored ?? `${provider}/${model}`;
       if (result.applied) {
         showToast(
           'Model Applied',
-          `${modeId}: ${provider}/${model} is now used by the running session and every chat turn in that mode.`,
+          `${modeId}: ${label} is now used by the running session and every chat turn in that mode.`,
           'success',
         );
       } else if (result.applyError) {
         showToast(
           'Routing Saved',
-          `${modeId}: ${provider}/${model} saved and used by chat turns. Live session switch failed: ${result.applyError}`,
+          `${modeId}: ${label} saved and used by chat turns. Live session switch failed: ${result.applyError}`,
           'warning',
         );
       } else {
-        showToast(
-          'Routing Saved',
-          `${modeId}: ${provider}/${model} will be used for that mode in the chat.`,
-          'success',
-        );
+        showToast('Routing Saved', `${modeId}: ${label} will be used for that mode in the chat.`, 'success');
       }
     } catch (e: any) {
       showToast('Model Change Failed', e?.message ?? 'Unable to update runtime model routing.', 'error');

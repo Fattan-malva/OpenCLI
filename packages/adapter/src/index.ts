@@ -167,7 +167,13 @@ export class AdapterRouter {
     private isActive: (adapterId: string) => boolean = () => true,
   ) {}
 
-  async resolve(requirement: AdapterRouteRequirement = {}): Promise<AdapterRoute | undefined> {
+  /**
+   * Ranks every adapter that satisfies the requirement, best first.
+   *
+   * `resolve` picks the single best route; `resolveMany` exposes the whole
+   * ranking so a workflow can hand different steps to different adapters.
+   */
+  async rank(requirement: AdapterRouteRequirement = {}): Promise<AdapterRoute[]> {
     const required = new Set(requirement.requiredCapabilities ?? []);
     const excluded = new Set(requirement.excludedAdapterIds ?? []);
     const routes: AdapterRoute[] = [];
@@ -186,6 +192,26 @@ export class AdapterRouter {
     }
 
     routes.sort((a, b) => b.score - a.score || a.adapterId.localeCompare(b.adapterId));
+    return routes;
+  }
+
+  /** The single best adapter for a requirement, or undefined when none fits. */
+  async resolve(requirement: AdapterRouteRequirement = {}): Promise<AdapterRoute | undefined> {
+    const routes = await this.rank(requirement);
     return routes[0];
+  }
+
+  /**
+   * Up to `maxAdapters` distinct adapters, best first.
+   *
+   * Used when a task should be reviewed or built in parallel by more than one
+   * agent. An empty result means nothing active satisfies the requirement.
+   */
+  async resolveMany(
+    requirement: AdapterRouteRequirement & { maxAdapters?: number } = {},
+  ): Promise<AdapterRoute[]> {
+    const routes = await this.rank(requirement);
+    const limit = requirement.maxAdapters ?? routes.length;
+    return routes.slice(0, Math.max(0, limit));
   }
 }

@@ -96,9 +96,6 @@ export interface Task {
 
 export type TaskKind = 'manual' | 'chat';
 
-/** How adapters cooperate for a chat prompt (user-driven, not AI-chosen). */
-export type InteractionMode = 'ask' | 'plan' | 'agent';
-
 /** Global confirmation behaviour for permission requests and plan review. */
 export type ConfirmationPolicy = 'default' | 'allowAll' | 'autoPilot';
 
@@ -217,8 +214,62 @@ export interface ChatThread {
   title: string;
   /** Workflow auto-created by the planner for this conversation. */
   workflowId?: string;
+  /**
+   * The single adapter this conversation talks to.
+   *
+   * "Active" adapters and the "chat" adapter are different concepts: many
+   * adapters can be active and available to a workflow while the conversation
+   * itself is addressed to exactly one of them.
+   */
+  chatAdapterId?: string;
+  /**
+   * The adapter's own primary mode for this conversation, discovered from the
+   * CLI rather than assumed. Kept separate from `interactionMode` so names like
+   * "ask" or "plan" cannot be ambiguous between the two layers.
+   */
+  adapterMode?: string;
+  /** OpenCLI-level operating mode for this conversation. */
+  interactionMode?: InteractionMode;
+  /** Where the plan lifecycle currently stands. */
+  planStatus?: PlanStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * OpenCLI's own operating modes.
+ *
+ * These belong to OpenCLI, not to any adapter, so they are fixed. Everything an
+ * adapter contributes (primary agents, subagents, models, providers) is
+ * discovered from the CLI instead.
+ */
+export type InteractionMode = 'ask' | 'plan' | 'agent';
+
+/** Lifecycle of the plan attached to a conversation. */
+export type PlanStatus =
+  | 'none'
+  | 'generating'
+  | 'ready'
+  | 'approved'
+  | 'executing'
+  | 'completed';
+
+/**
+ * One resolved chat target.
+ *
+ * `interactionMode` decides *how* the work is handled; `adapterId` and
+ * `adapterMode` decide *who* handles it. Keeping them apart stops an adapter
+ * mode name from being mistaken for an OpenCLI interaction mode.
+ */
+export interface ChatExecution {
+  interactionMode: InteractionMode;
+  /** The one adapter this message is addressed to. */
+  adapterId: string;
+  /** That adapter's own primary mode. */
+  adapterMode?: string;
+  /** Workflow created by a plan, when the interaction produced one. */
+  workflowId?: string;
+  planStatus?: PlanStatus;
 }
 
 export type ChatMessageRole = 'user' | 'planner' | 'agent' | 'system';

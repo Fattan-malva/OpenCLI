@@ -6,10 +6,33 @@ import { Icon } from '../lib/icons';
 import { api } from '../lib/api';
 import type { AdapterCapabilities, ConfirmationPolicy, InteractionMode } from '../lib/types';
 
+/**
+ * OpenCLI's own operating modes.
+ *
+ * These belong to OpenCLI rather than to any adapter, so they are fixed. What an
+ * adapter contributes (its primary agents) is discovered from the CLI, and is
+ * shown in a separate "Adapter mode" chip so names like "ask" or "plan" are never
+ * ambiguous between the two layers.
+ */
 const INTERACTION_MODES: Array<{ id: InteractionMode; label: string; icon: string; hint: string }> = [
-  { id: 'ask', label: 'Ask', icon: 'eye', hint: 'same read-only prompt to every running adapter' },
-  { id: 'plan', label: 'Plan', icon: 'list-checks', hint: 'planner builds a todo list — nothing runs until you execute' },
-  { id: 'agent', label: 'Agent', icon: 'bot', hint: 'planner splits the work and the team executes it together' },
+  {
+    id: 'ask',
+    label: 'Ask',
+    icon: 'eye',
+    hint: 'ask the selected adapter only. No task, no workflow, nobody else runs',
+  },
+  {
+    id: 'plan',
+    label: 'Plan',
+    icon: 'list-checks',
+    hint: 'the selected adapter writes a todo list. Nothing runs until you execute it',
+  },
+  {
+    id: 'agent',
+    label: 'Agent',
+    icon: 'bot',
+    hint: 'plan the work, then route each step across your active adapters',
+  },
 ];
 
 const POLICIES: Array<{ id: ConfirmationPolicy; label: string; icon: string; hint: string }> = [
@@ -52,23 +75,52 @@ interface ModeEntry {
 }
 
 export function ChatComposer() {
-  const { sessions, sendChat, activeThread, activeProject } = useStore();
+  const { sessions, sendChat, activeThread, activeProject, capabilities, loadCapabilities } = useStore();
   const boxRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [openMenu, setOpenMenu] = useState<'mode' | 'policy' | null>(null);
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>('agent');
+  const [openMenu, setOpenMenu] = useState<'adapter' | 'adapterMode' | 'mode' | 'policy' | null>(null);
+  // Ask is the default: it is the only mode with no side effects.
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>('ask');
   const [confirmationPolicy, setConfirmationPolicy] = useState<ConfirmationPolicy>('default');
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [capModes, setCapModes] = useState<Record<string, AdapterCapabilities | null>>({});
+
+  // The one adapter this conversation talks to. Distinct from "active":
+  // several adapters can be active and available to a workflow while the chat
+  // itself is addressed to exactly one.
+  const [chatAdapterId, setChatAdapterId] = useState<string | null>(null);
+  // That adapter's own primary mode, discovered from the CLI.
+  const [adapterMode, setAdapterMode] = useState<string>('');
 
   const running = useMemo(
     () => sessions.filter((session) => session.status === 'running'),
     [sessions],
   );
 
+  const runningIds = running.map((session) => session.adapterId);
+  const runningKey = runningIds.join(',');
+
+  // Restore the conversation's own adapter and mode, so switching threads does
+  // not silently move the chat somewhere else.
+  useEffect(() => {
+    if (!activeThread) return;
+    if (activeThread.chatAdapterId) setChatAdapterId(activeThread.chatAdapterId);
+    if (activeThread.adapterMode) setAdapterMode(activeThread.adapterMode);
+    if (activeThread.interactionMode) setInteractionMode(activeThread.interactionMode);
+  }, [activeThread?.id, activeThread?.chatAdapterId, activeThread?.adapterMode, activeThread?.interactionMode]);
+
+  // Fall back to the first running adapter only when the thread has no choice
+  // yet. A stopped adapter is never silently replaced mid-conversation.
+  useEffect(() => {
+    if (chatAdapterId && runningIds.includes(chatAdapterId)) return;
+    setChatAdapterId(activeThread?.chatAdapterId ?? runningIds[0] ?? null);
+  }, [runningKey, activeThread?.chatAdapterId]);
+
+  // Read each running CLI's own primary agents. Discovery is cached server-side,
+  // so this is cheap after the first call.
   useEffect(() => {
     if (!activeProject || running.length === 0) {
       setCapModes({});
@@ -76,6 +128,7 @@ export function ChatComposer() {
     }
     let cancelled = false;
     for (const session of running) {
+      void loadCapabilities(session.adapterId);
       api
         .getProjectAdapterCapabilities(activeProject.id, session.adapterId)
         .then((caps) => {
@@ -88,7 +141,25 @@ export function ChatComposer() {
     return () => {
       cancelled = true;
     };
-  }, [activeProject?.id, running.map((session) => session.adapterId).join(',')]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id, runningKey]);
+
+  /** Primary agents the selected CLI reported, or nothing if it reported none. */
+  const adapterModes = useMemo(() => {
+    if (!chatAdapterId) return [] as string[];
+    const fromCli = (capModes[chatAdapterId]?.modes ?? []).map((mode) => mode.id);
+    if (fromCli.length > 0) return fromCli;
+    return (capabilities[chatAdapterId]?.modes ?? []).map((mode) => mode.id);
+  }, [chatAdapterId, capModes, capabilities]);
+
+  // Keep the adapter mode valid for whichever adapter is selected.
+  useEffect(() => {
+    if (adapterModes.length === 0) {
+      setAdapterMode('');
+      return;
+    }
+    if (!adapterMode || !adapterModes.includes(adapterMode)) setAdapterMode(adapterModes[0]!);
+  }, [adapterModes.join(','), adapterMode]);
 
   const modeEntries = useMemo(() => {
     const entries: ModeEntry[] = [];
@@ -157,6 +228,10 @@ export function ChatComposer() {
     const tag = `@${entry.adapterId}/${entry.modeId}`;
     const next = `${before}${tag} ${after}`;
     setText(next);
+    // A mention is an explicit routing decision, so it also moves the
+    // conversation's target rather than only annotating the text.
+    setChatAdapterId(entry.adapterId);
+    if (entry.modeId) setAdapterMode(entry.modeId);
     const position = before.length + tag.length + 1;
     requestAnimationFrame(() => {
       el.focus();
@@ -199,7 +274,9 @@ export function ChatComposer() {
     if (!trimmed || sending) return;
     setSending(true);
     try {
-      await sendChat(trimmed, undefined, undefined, interactionMode, confirmationPolicy);
+      // The message is addressed to exactly one adapter, in one of that
+      // adapter's own modes. Interaction mode decides how it is handled.
+      await sendChat(trimmed, chatAdapterId ?? undefined, adapterMode || undefined, interactionMode, confirmationPolicy);
       setText('');
       setMention(null);
     } finally {
@@ -251,13 +328,11 @@ export function ChatComposer() {
               placeholder={
                 running.length === 0
                   ? 'Start an adapter session on the Adapters page to chat with agents'
-                  : activeThread
-                    ? interactionMode === 'ask'
-                      ? 'Describe a task to run read-only across every running adapter'
-                      : 'Give a task or ask a follow-up. Type @ to hand it to a specific agent.'
-                    : interactionMode === 'ask'
-                      ? 'Describe a task to run read-only across every running adapter'
-                      : 'Describe the task you want the agents to do'
+                  : interactionMode === 'ask'
+                    ? `Ask ${chatAdapterId ?? 'the selected adapter'} something. Only this adapter answers.`
+                    : interactionMode === 'plan'
+                      ? `Ask ${chatAdapterId ?? 'the selected adapter'} for a plan. Nothing runs until you execute it.`
+                      : 'Describe the work. It is planned, then routed across your active adapters.'
               }
               className="flex-1 resize-none bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-textStrong focus:outline-none focus:border-app-primary placeholder-app-text/50"
             />
@@ -273,6 +348,93 @@ export function ChatComposer() {
         </div>
 
         <div ref={boxRef} className="mt-2 flex items-center gap-2 flex-wrap">
+          {/* Which single adapter this conversation talks to. */}
+          <div className="relative">
+            <ChipControl
+              icon={chatAdapterId ? adapterMeta(chatAdapterId).icon : 'bot'}
+              label={chatAdapterId ? adapterMeta(chatAdapterId).name : 'No adapter'}
+              open={openMenu === 'adapter'}
+              onClick={() => setOpenMenu(openMenu === 'adapter' ? null : 'adapter')}
+            />
+            {openMenu === 'adapter' && (
+              <div className="absolute left-0 bottom-full mb-1 w-64 z-20 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/20 p-1.5 space-y-0.5">
+                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-app-text">
+                  Chat with one adapter
+                </div>
+                {running.length === 0 && (
+                  <div className="px-2 py-2 text-[11px] text-app-text">No adapter session is running.</div>
+                )}
+                {running.map((session) => {
+                  const meta = adapterMeta(session.adapterId);
+                  const selected = session.adapterId === chatAdapterId;
+                  return (
+                    <button
+                      key={session.adapterId}
+                      onClick={() => {
+                        setChatAdapterId(session.adapterId);
+                        setOpenMenu(null);
+                      }}
+                      className={`w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                        selected ? 'bg-app-primary/10' : 'hover:bg-app-hover'
+                      }`}
+                    >
+                      <Icon name={meta.icon} className={`w-4 h-4 shrink-0 ${meta.color}`} />
+                      <span className="text-xs text-app-textStrong truncate">{meta.name}</span>
+                      <span className="text-[10px] font-mono text-app-text">{session.adapterId}</span>
+                      {selected && (
+                        <Icon name="check" className="w-3.5 h-3.5 ml-auto shrink-0 text-app-primary" />
+                      )}
+                    </button>
+                  );
+                })}
+                {running.length > 1 && (
+                  <div className="px-2 py-1.5 text-[10px] text-app-text border-t border-app-border mt-1">
+                    Active: {running.map((s) => s.adapterId).join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* That adapter's own primary modes, exactly as the CLI reported them. */}
+          {adapterModes.length > 0 && (
+            <div className="relative">
+              <ChipControl
+                icon="terminal"
+                label={adapterMode}
+                open={openMenu === 'adapterMode'}
+                onClick={() => setOpenMenu(openMenu === 'adapterMode' ? null : 'adapterMode')}
+              />
+              {openMenu === 'adapterMode' && (
+                <div className="absolute left-0 bottom-full mb-1 w-56 z-20 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/20 p-1.5 space-y-0.5">
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-app-text">
+                    {chatAdapterId} modes
+                  </div>
+                  {adapterModes.map((id) => {
+                    const selected = id === adapterMode;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setAdapterMode(id);
+                          setOpenMenu(null);
+                        }}
+                        className={`w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                          selected ? 'bg-app-primary/10' : 'hover:bg-app-hover'
+                        }`}
+                      >
+                        <span className="text-xs font-mono text-app-textStrong">{id}</span>
+                        {selected && (
+                          <Icon name="check" className="w-3.5 h-3.5 ml-auto shrink-0 text-app-primary" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="relative">
             <ChipControl icon={modeOption.icon} label={modeOption.label} open={openMenu === 'mode'} onClick={() => setOpenMenu(openMenu === 'mode' ? null : 'mode')} />
             {openMenu === 'mode' && (

@@ -30,6 +30,11 @@ export interface AdapterCapabilities {
   subagents: Mode[];
   providers: string[];
   models: Record<string, string[]>;
+  /**
+   * `provider/model` to the exact spec the CLI printed, so callers can hand the
+   * original string back instead of reconstructing one.
+   */
+  specs: Record<string, string>;
   /** Per-mode model routing (from the CLI's own config). */
   modeModels: Record<string, ModeModelConfig>;
   current: {
@@ -212,6 +217,7 @@ export async function probeCapabilities(
       subagents: [],
       providers: [],
       models: {},
+      specs: {},
       modeModels: {},
       current: { provider: '', model: '', mode: '' },
       source: 'none',
@@ -244,6 +250,7 @@ export async function probeCapabilities(
     subagents,
     providers,
     models,
+    specs: Object.fromEntries(specs),
     modeModels,
     current: {
       provider: manifest.current?.provider ?? '',

@@ -513,23 +513,35 @@ export class OpenCLIRepository {
 
   // === Runtime model routing ===
 
-  listModelRoutings(projectId: string): Record<string, Record<string, { provider: string; model: string }>> {
+  /**
+   * Per-adapter, per-mode model routing.
+   *
+   * `spec` is the exact string the CLI printed and is what gets sent back to
+   * it. Reconstructing the argument from `provider` + `model` loses prefixes
+   * that CLIs require, so it is only a fallback for rows written before the
+   * spec column existed.
+   */
+  listModelRoutings(
+    projectId: string,
+  ): Record<string, Record<string, { provider: string; model: string; spec?: string }>> {
     const rows = this.db
       .prepare(
-        'SELECT agent_id, mode_id, provider, model FROM model_routings WHERE project_id = ? ORDER BY agent_id, mode_id',
+        'SELECT agent_id, mode_id, provider, model, spec FROM model_routings WHERE project_id = ? ORDER BY agent_id, mode_id',
       )
       .all(projectId) as Array<{
       agent_id: string;
       mode_id: string;
       provider: string;
       model: string;
+      spec: string | null;
     }>;
 
-    const result: Record<string, Record<string, { provider: string; model: string }>> = {};
+    const result: Record<string, Record<string, { provider: string; model: string; spec?: string }>> = {};
     for (const row of rows) {
       (result[row.agent_id] ??= {})[row.mode_id] = {
         provider: row.provider,
         model: row.model,
+        spec: row.spec ?? undefined,
       };
     }
     return result;
@@ -541,18 +553,27 @@ export class OpenCLIRepository {
     modeId: string,
     provider: string,
     model: string,
-  ): { projectId: string; agentId: string; modeId: string; provider: string; model: string; updatedAt: string } {
+    spec?: string,
+  ): {
+    projectId: string;
+    agentId: string;
+    modeId: string;
+    provider: string;
+    model: string;
+    spec?: string;
+    updatedAt: string;
+  } {
     const updatedAt = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT INTO model_routings (project_id, agent_id, mode_id, provider, model, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO model_routings (project_id, agent_id, mode_id, provider, model, spec, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(project_id, agent_id, mode_id)
-         DO UPDATE SET provider=excluded.provider, model=excluded.model, updated_at=excluded.updated_at`,
+         DO UPDATE SET provider=excluded.provider, model=excluded.model, spec=excluded.spec, updated_at=excluded.updated_at`,
       )
-      .run(projectId, agentId, modeId, provider, model, updatedAt);
+      .run(projectId, agentId, modeId, provider, model, spec ?? null, updatedAt);
 
-    return { projectId, agentId, modeId, provider, model, updatedAt };
+    return { projectId, agentId, modeId, provider, model, spec, updatedAt };
   }
 
   // === Settings (key/value) ===
@@ -607,8 +628,22 @@ export class OpenCLIRepository {
     if (!existing) return undefined;
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     this.db
-      .prepare('UPDATE chat_threads SET title=?, workflow_id=?, updated_at=? WHERE id=?')
-      .run(updated.title, updated.workflowId ?? null, updated.updatedAt, id);
+      .prepare(
+        `UPDATE chat_threads
+         SET title=?, workflow_id=?, chat_adapter_id=?, adapter_mode=?, interaction_mode=?,
+             plan_status=?, updated_at=?
+         WHERE id=?`,
+      )
+      .run(
+        updated.title,
+        updated.workflowId ?? null,
+        updated.chatAdapterId ?? null,
+        updated.adapterMode ?? null,
+        updated.interactionMode ?? null,
+        updated.planStatus ?? null,
+        updated.updatedAt,
+        id,
+      );
     return updated;
   }
 
@@ -849,6 +884,10 @@ export class OpenCLIRepository {
       projectId: row.project_id,
       title: row.title,
       workflowId: row.workflow_id ?? undefined,
+      chatAdapterId: row.chat_adapter_id ?? undefined,
+      adapterMode: row.adapter_mode ?? undefined,
+      interactionMode: row.interaction_mode ?? undefined,
+      planStatus: row.plan_status ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

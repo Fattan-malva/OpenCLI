@@ -120,7 +120,7 @@ export const api = {
     return request<AgentManifest>(`/adapters/${encodeURIComponent(id)}/manifest/refresh`, { method: 'POST' });
   },
   getModelRouting(projectId: string) {
-    return request<Record<string, Record<string, { provider: string; model: string }>>>(
+    return request<Record<string, Record<string, { provider: string; model: string; spec?: string }>>>(
       `/projects/${encodeURIComponent(projectId)}/model-routing`,
     );
   },
@@ -130,16 +130,26 @@ export const api = {
     modeId: string,
     provider: string,
     model: string,
+    spec?: string,
   ) {
     return request<{
-      routing: { projectId: string; agentId: string; modeId: string; provider: string; model: string; updatedAt: string };
+      routing: {
+        projectId: string;
+        agentId: string;
+        modeId: string;
+        provider: string;
+        model: string;
+        spec?: string;
+        updatedAt: string;
+      };
       applied: boolean;
       applyError?: string;
+      spec?: string | null;
     }>(
       `/projects/${encodeURIComponent(projectId)}/model-routing/${encodeURIComponent(agentId)}/${encodeURIComponent(modeId)}`,
       {
         method: 'PUT',
-        body: JSON.stringify({ provider, model }),
+        body: JSON.stringify({ provider, model, spec }),
       },
     );
   },
@@ -305,7 +315,7 @@ export const api = {
   listChatThreads(projectId: string) {
     return request<ChatThread[]>(`/projects/${encodeURIComponent(projectId)}/chat`);
   },
-  createChatThread(projectId: string, input: { title?: string; text?: string; adapterId?: string; mode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
+  createChatThread(projectId: string, input: { title?: string; text?: string; chatAdapterId?: string; adapterMode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
     return request<{ thread: ChatThread; messages: ChatMessage[] }>(`/projects/${encodeURIComponent(projectId)}/chat`, {
       method: 'POST',
       body: JSON.stringify(input),
@@ -316,7 +326,7 @@ export const api = {
       `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/messages`,
     );
   },
-  sendChatMessage(projectId: string, threadId: string, input: { text: string; adapterId?: string; mode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
+  sendChatMessage(projectId: string, threadId: string, input: { text: string; chatAdapterId?: string; adapterMode?: string; interactionMode?: InteractionMode; confirmationPolicy?: ConfirmationPolicy }) {
     return request<{ thread: ChatThread; messages: ChatMessage[] }>(
       `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/messages`,
       { method: 'POST', body: JSON.stringify(input) },

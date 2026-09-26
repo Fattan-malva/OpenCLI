@@ -28,7 +28,11 @@ export function getSystemSettings(db: OpenCLIRepository): SystemSettings {
  * belong to the chat input form and travel WITH each message — they are not
  * global settings.
  */
-export const DEFAULT_INTERACTION_MODE: InteractionMode = 'agent';
+/**
+ * Ask is the default because it is the only mode that has no side effects: one
+ * adapter answers, no workflow is created and nothing else runs.
+ */
+export const DEFAULT_INTERACTION_MODE: InteractionMode = 'ask';
 export const DEFAULT_CONFIRMATION_POLICY: ConfirmationPolicy = 'default';
 
 export function resolvedInteractionMode(explicit?: InteractionMode | undefined): InteractionMode {

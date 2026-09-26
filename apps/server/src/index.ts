@@ -33,7 +33,7 @@ import {
   stopThread,
   type ChatDeps,
 } from './chat.js';
-import { sanitizeConfirmationPolicy, sanitizeInteractionMode, sanitizeSettingsPatch } from './settings.js';
+import { sanitizeConfirmationPolicy, sanitizeInteractionMode, sanitizeSettingsPatch, DEFAULT_INTERACTION_MODE } from './settings.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
 mkdirSync(DATA_DIR, { recursive: true });
@@ -498,9 +498,10 @@ api.put('/projects/:projectId/model-routing/:agentId/:modeId', async (c) => {
   const project = db.getProject(projectId);
   if (!project) return c.json({ error: 'Project not found' }, 404);
 
-  const body = await c.req.json<{ provider?: string; model?: string }>();
+  const body = await c.req.json<{ provider?: string; model?: string; spec?: string }>();
   const provider = String(body?.provider ?? '').trim();
   const model = String(body?.model ?? '').trim();
+  const spec = String(body?.spec ?? '').trim() || undefined;
   if (!provider || !model) {
     return c.json({ error: 'provider and model are required' }, 400);
   }
@@ -510,23 +511,27 @@ api.put('/projects/:projectId/model-routing/:agentId/:modeId', async (c) => {
     const modeExists = capabilities.modes.some((mode) => mode.id === modeId);
     if (!modeExists) return c.json({ error: `Unknown mode: ${modeId}` }, 400);
 
+    // The routing must name a model this CLI actually published, and it must
+    // keep the exact spec so the argument can be handed back untouched.
     const providerModels = capabilities.models[provider] ?? [];
     if (providerModels.length > 0 && !providerModels.includes(model)) {
       return c.json({ error: `Model ${provider}/${model} is not available for adapter ${agentId}` }, 400);
     }
+    const resolvedSpec = capabilities.modeModels?.[modeId]?.spec;
+    const exactSpec = spec ?? (capabilities.specs?.[`${provider}/${model}`] ?? undefined);
 
-    const routing = db.setModelRouting(projectId, agentId, modeId, provider, model);
+    const routing = db.setModelRouting(projectId, agentId, modeId, provider, model, exactSpec);
     const session = getSession(projectId, agentId);
     let applied = false;
     let applyError: string | undefined;
 
     if (session?.status === 'running' || session?.status === 'starting') {
-      const result = await setSessionModel(projectId, agentId, provider, model);
+      const result = await setSessionModel(projectId, agentId, provider, model, exactSpec);
       applied = result.ok;
       if (!result.ok) applyError = result.error;
     }
 
-    return c.json({ routing, applied, applyError });
+    return c.json({ routing, applied, applyError, spec: exactSpec ?? resolvedSpec ?? null });
   } catch (e: any) {
     return c.json({ error: e?.message ?? 'Unable to save model routing' }, 500);
   }
@@ -554,10 +559,10 @@ async function applyProjectModelRouting(
   const selected = db.listModelRoutings(projectId)[adapterId]?.[mode];
   if (!selected) return;
 
-  const result = await setSessionModel(projectId, adapterId, selected.provider, selected.model);
+  const result = await setSessionModel(projectId, adapterId, selected.provider, selected.model, selected.spec);
   if (!result.ok) {
     console.warn(
-      `[ModelRouting] Could not apply ${adapterId} ${mode} -> ${selected.provider}/${selected.model}: ${result.error}`,
+      `[ModelRouting] Could not apply ${adapterId} ${mode} -> ${selected.spec ?? `${selected.provider}/${selected.model}`}: ${result.error}`,
     );
   }
 }
@@ -735,7 +740,7 @@ api.post('/projects/:projectId/chat', async (c) => {
   const project = db.getProject(projectId);
   if (!project) return c.json({ error: 'Project not found' }, 404);
 
-  const body = await c.req.json<{ title?: string; text?: string; adapterId?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
+  const body = await c.req.json<{ title?: string; text?: string; adapterId?: string; adapterMode?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
   const title = String(body?.title ?? body?.text ?? 'New Chat').trim() || 'New Chat';
   const thread = createThread(chatDeps, projectId, title);
 
@@ -745,8 +750,11 @@ api.post('/projects/:projectId/chat', async (c) => {
       projectId,
       threadId: thread.id,
       text,
-      targetAdapterId: body?.adapterId,
-      mode: body?.mode,
+      // `chatAdapterId` is the one adapter this conversation talks to;
+      // `adapterMode` is that adapter's own primary mode, discovered from the
+      // CLI. They are separate from the OpenCLI interaction mode.
+      targetAdapterId: body?.chatAdapterId ?? body?.adapterId,
+      mode: body?.adapterMode ?? body?.mode,
       interactionMode: sanitizeInteractionMode(body?.interactionMode),
       confirmationPolicy: sanitizeConfirmationPolicy(body?.confirmationPolicy),
     });
@@ -754,6 +762,27 @@ api.post('/projects/:projectId/chat', async (c) => {
   }
 
   return c.json({ thread, messages: [] }, 201);
+});
+
+/**
+ * What a conversation is currently pointed at.
+ *
+ * Lets the UI restore the adapter and adapter mode a thread was using, and show
+ * where the plan lifecycle stands, without inferring any of it.
+ */
+api.get('/projects/:projectId/chat/:threadId/runtime', (c) => {
+  const thread = db.getChatThread(c.req.param('threadId'));
+  if (!thread || thread.projectId !== c.req.param('projectId')) {
+    return c.json({ error: 'Chat thread not found' }, 404);
+  }
+  return c.json({
+    threadId: thread.id,
+    chatAdapterId: thread.chatAdapterId ?? null,
+    adapterMode: thread.adapterMode ?? null,
+    interactionMode: thread.interactionMode ?? DEFAULT_INTERACTION_MODE,
+    workflowId: thread.workflowId ?? null,
+    planStatus: thread.planStatus ?? 'none',
+  });
 });
 
 api.get('/projects/:projectId/chat/:threadId/messages', (c) => {
@@ -770,7 +799,7 @@ api.post('/projects/:projectId/chat/:threadId/messages', async (c) => {
   const thread = db.getChatThread(threadId);
   if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
 
-  const body = await c.req.json<{ text?: string; adapterId?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
+  const body = await c.req.json<{ text?: string; adapterId?: string; adapterMode?: string; mode?: string; interactionMode?: string; confirmationPolicy?: string }>().catch(() => ({} as any));
   const text = String(body?.text ?? '').trim();
   if (!text) return c.json({ error: 'text is required' }, 400);
 
@@ -779,8 +808,8 @@ api.post('/projects/:projectId/chat/:threadId/messages', async (c) => {
       projectId,
       threadId,
       text,
-      targetAdapterId: body?.adapterId,
-      mode: body?.mode,
+      targetAdapterId: body?.chatAdapterId ?? body?.adapterId,
+      mode: body?.adapterMode ?? body?.mode,
       interactionMode: sanitizeInteractionMode(body?.interactionMode),
       confirmationPolicy: sanitizeConfirmationPolicy(body?.confirmationPolicy),
     }));

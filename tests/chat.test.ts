@@ -10,7 +10,8 @@ import {
 } from '../apps/server/src/sessionProtocol.js';
 import { formatActivity } from '../apps/server/src/chatRuntime.js';
 import { assignDefaultAgents, buildPlannerPrompt, heuristicPlannerDecision, parseExecutionPlan, parsePlannerDecision } from '../apps/server/src/planner.js';
-import { createWorkflowForBroadcast, parseMention, type ChatDeps } from '../apps/server/src/chat.js';
+import { createWorkflowForPlan, parseMention, type ChatDeps } from '../apps/server/src/chat.js';
+import type { PlanStep } from '@opencli/domain';
 import { shouldAutoApprove } from '../apps/server/src/settings.js';
 import { buildDependencyContext, type WorkflowRuntime } from '../apps/server/src/workflow.js';
 import { OpenCLIRepository } from '../packages/db/src/index.js';
@@ -509,8 +510,7 @@ describe('chat repository', () => {
     expect(repo.getChatMessage(agent.id)?.request).toBeUndefined();
   });
 });
-
-describe('broadcast workflow creation', () => {
+describe('chat targets exactly one adapter', () => {
   function makeChatDeps(): {
     repo: OpenCLIRepository;
     thread: ReturnType<OpenCLIRepository['createChatThread']>;
@@ -519,7 +519,7 @@ describe('broadcast workflow creation', () => {
   } {
     const repo = makeRepo();
     const project = repo.createProject({ name: 'Demo', path: 'C:/demo', status: 'active' });
-    const thread = repo.createChatThread({ projectId: project.id, title: 'Broadcast' });
+    const thread = repo.createChatThread({ projectId: project.id, title: 'Chat' });
     const emitted: string[] = [];
     const deps = {
       db: repo,
@@ -538,33 +538,149 @@ describe('broadcast workflow creation', () => {
     return { repo, thread, deps, emitted };
   }
 
-  it('creates one read-only task per adapter with the exact same prompt', () => {
-    const { repo, thread, deps, emitted } = makeChatDeps();
+  const STEPS: PlanStep[] = [
+    { title: 'Analyze auth', description: 'read the code', dependsOn: [] },
+    { title: 'Design schema', description: 'write the design', dependsOn: [0] },
+    { title: 'Implement backend', description: 'code it', dependsOn: [1] },
+  ];
 
-    const { workflowId, taskIds } = createWorkflowForBroadcast(
+  it('keeps every plan step on the chat adapter in plan mode', () => {
+    const { repo, thread, deps } = makeChatDeps();
+
+    const { workflowId, taskIds } = createWorkflowForPlan(
       deps,
       thread,
-      'Explain the deadlock',
-      ['opencode', 'claude'],
-      { opencode: 'plan', claude: 'build' },
+      'Build an auth system',
+      STEPS,
+      ['opencode'],
+      false,
+      'plan',
     );
 
-    expect(taskIds).toHaveLength(2);
-    const tasks = taskIds.map((id) => repo.getTask(id)).filter((task) => task !== undefined);
-    expect(tasks.map((task) => task.agentId)).toEqual(['opencode', 'claude']);
-    expect(tasks.every((task) => task.kind === 'chat' && task.broadcast && task.dependencies.length === 0)).toBe(true);
-    expect(tasks.map((task) => task.modeId)).toEqual(['plan', 'build']);
-    expect(tasks.every((task) => task.description === 'Explain the deadlock')).toBe(true);
+    expect(taskIds).toHaveLength(3);
+    const tasks = taskIds.map((id) => repo.getTask(id)!);
+    // Plan mode must not spread work to other adapters.
+    expect(tasks.every((task) => task.agentId === 'opencode')).toBe(true);
+    expect(tasks.map((task) => task.modeId)).toEqual(['plan', 'plan', 'plan']);
+    expect(repo.getWorkflow(workflowId)?.status).toBe('draft');
+    expect(tasks[0]!.dependencies).toEqual([]);
+    expect(tasks[1]!.dependencies).toEqual([tasks[0]!.id]);
+  });
 
-    const workflow = repo.getWorkflow(workflowId);
-    expect(workflow?.status).toBe('running');
-    expect(repo.getChatThread(thread.id)?.workflowId).toBe(workflowId);
+  it('spreads agent-mode steps across the active adapters', () => {
+    const { repo, thread, deps } = makeChatDeps();
 
-    const messages = repo.listChatMessages(thread.id);
-    expect(messages).toHaveLength(2);
-    expect(messages.every((message) => message.taskId)).toBe(true);
+    const { taskIds } = createWorkflowForPlan(
+      deps,
+      thread,
+      'Build an auth system',
+      STEPS,
+      ['opencode', 'kilocode'],
+      true,
+      'build',
+    );
 
-    expect(emitted).toContain('workflow.created');
-    expect(emitted.filter((type) => type === 'task.created')).toHaveLength(2);
+    const agents = taskIds.map((id) => repo.getTask(id)!.agentId);
+    expect(new Set(agents).size).toBe(2);
+  });
+
+  it('never leaves a task without an adapter when one is assignable', () => {
+    const { repo, thread, deps } = makeChatDeps();
+
+    const { taskIds } = createWorkflowForPlan(deps, thread, 'x', STEPS, ['claude'], false, undefined);
+
+    expect(taskIds.every((id) => Boolean(repo.getTask(id)!.agentId))).toBe(true);
+  });
+
+  it('leaves mode unset rather than inventing one', () => {
+    const { repo, thread, deps } = makeChatDeps();
+
+    const { taskIds } = createWorkflowForPlan(deps, thread, 'x', STEPS, ['claude'], false, undefined);
+
+    // A CLI that reports no modes must not receive a made-up mode name.
+    expect(taskIds.every((id) => repo.getTask(id)!.modeId === undefined)).toBe(true);
+  });
+
+  it('honours the planner agentId when it is in the assignable pool', () => {
+    const { repo, thread, deps } = makeChatDeps();
+
+    const { taskIds } = createWorkflowForPlan(
+      deps,
+      thread,
+      'x',
+      [{ title: 'step', description: 'd', agentId: 'kilocode', dependsOn: [] }],
+      ['opencode', 'kilocode'],
+      true,
+      'build',
+    );
+
+    expect(repo.getTask(taskIds[0]!)!.agentId).toBe('kilocode');
+  });
+
+  it('ignores a planner agentId outside the assignable pool', () => {
+    const { repo, thread, deps } = makeChatDeps();
+
+    const { taskIds } = createWorkflowForPlan(
+      deps,
+      thread,
+      'x',
+      [{ title: 'step', description: 'd', agentId: 'claude', dependsOn: [] }],
+      ['opencode'],
+      false,
+      'plan',
+    );
+
+    expect(repo.getTask(taskIds[0]!)!.agentId).toBe('opencode');
+  });
+
+  it('remembers the chat adapter and adapter mode on the thread', () => {
+    const { repo, thread } = makeChatDeps();
+
+    repo.updateChatThread(thread.id, {
+      chatAdapterId: 'kilocode',
+      adapterMode: 'code',
+      interactionMode: 'ask',
+      planStatus: 'none',
+    });
+
+    const reloaded = repo.getChatThread(thread.id)!;
+    expect(reloaded.chatAdapterId).toBe('kilocode');
+    expect(reloaded.adapterMode).toBe('code');
+    expect(reloaded.interactionMode).toBe('ask');
+    expect(reloaded.planStatus).toBe('none');
+  });
+});
+describe('model routing keeps the exact CLI spec', () => {
+  function repo() {
+    const r = makeRepo();
+    const project = r.createProject({ name: 'Routing', path: 'C:/demo', status: 'active' });
+    return { r, project };
+  }
+
+  it('stores and returns the spec so the CLI gets the original string', () => {
+    const { r, project } = repo();
+    r.setModelRouting(project.id, 'opencode', 'build', 'default', 'big-pickle', 'opencode/big-pickle');
+
+    const routing = r.listModelRoutings(project.id);
+    // provider/model alone would produce "default/big-pickle", which the CLI
+    // rejects; the spec is what must be sent.
+    expect(routing.opencode!.build!.spec).toBe('opencode/big-pickle');
+    expect(routing.opencode!.build!.provider).toBe('default');
+  });
+
+  it('leaves spec undefined for rows written before the column existed', () => {
+    const { r, project } = repo();
+    r.setModelRouting(project.id, 'claude', 'plan', 'anthropic', 'claude-opus-latest');
+    expect(r.listModelRoutings(project.id).claude!.plan!.spec).toBeUndefined();
+  });
+
+  it('replaces a stale spec when the routing changes', () => {
+    const { r, project } = repo();
+    r.setModelRouting(project.id, 'opencode', 'build', 'default', 'a', 'opencode/a');
+    r.setModelRouting(project.id, 'opencode', 'build', 'google', 'b', 'google/b');
+
+    const entry = r.listModelRoutings(project.id).opencode!.build!;
+    expect(entry.spec).toBe('google/b');
+    expect(entry.provider).toBe('google');
   });
 });

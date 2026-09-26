@@ -109,6 +109,30 @@ export interface Store {
   executeChatPlan: () => Promise<void>;
 }
 
+/**
+ * Folds a server transcript into what is already on screen.
+ *
+ * The server answers a send request with the transcript as it was when the
+ * request was accepted, which is before the agent has produced anything. A
+ * streamed reply can therefore already be in state, and replacing the list
+ * outright would delete it until the next message forced a refresh. Messages
+ * the server knows about win, except when it only knows a newer one.
+ */
+function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  if (incoming.length === 0) return current;
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    const existing = byId.get(message.id);
+    byId.set(
+      message.id,
+      existing && (existing.text?.length ?? 0) > (message.text?.length ?? 0)
+        ? { ...message, text: existing.text }
+        : message,
+    );
+  }
+  return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 const COLOR_CLASSES: Record<GlobalStatus['color'], string> = {
   indigo: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
   amber: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
@@ -513,18 +537,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    // The server dispatches the turn in the background, so the response only
+    // contains what existed when the request was accepted. Anything the agent
+    // produced after that arrives over SSE, and a brand new thread emits those
+    // events before this client has even learned its id.
+    //
+    // So the thread is switched first and the transcript is then re-read from
+    // the server. That closes the window in which the reply would otherwise be
+    // dropped and only appear once a second message forced a refresh.
+    const resync = async (projectId: string, threadId: string) => {
+      try {
+        const [messages, threads] = await Promise.all([
+          api.listChatMessages(projectId, threadId),
+          api.listChatThreads(projectId),
+        ]);
+        setChatMessages(messages);
+        setChatThreads(threads);
+      } catch {
+        /* keep whatever is already shown */
+      }
+    };
+
     try {
       if (!activeThreadId) {
-        const created = await api.createChatThread(activeProject.id, { text: trimmed, adapterId, mode, interactionMode, confirmationPolicy });
+        const created = await api.createChatThread(activeProject.id, {
+          text: trimmed,
+          chatAdapterId: adapterId,
+          adapterMode: mode,
+          interactionMode,
+          confirmationPolicy,
+        });
         setChatThreads((prev) => [created.thread, ...prev.filter((thread) => thread.id !== created.thread.id)]);
-        loadedThreadRef.current = created.thread.id;
+        // Let the loader effect fetch the transcript, including any reply that
+        // was produced before this thread became the active one.
+        loadedThreadRef.current = null;
         setActiveThreadId(created.thread.id);
-        setChatMessages(created.messages);
+        await resync(activeProject.id, created.thread.id);
         return;
       }
-      const result = await api.sendChatMessage(activeProject.id, activeThreadId, { text: trimmed, adapterId, mode, interactionMode, confirmationPolicy });
+
+      const threadId = activeThreadId;
+      const result = await api.sendChatMessage(activeProject.id, threadId, {
+        text: trimmed,
+        chatAdapterId: adapterId,
+        adapterMode: mode,
+        interactionMode,
+        confirmationPolicy,
+      });
       setChatThreads((prev) => prev.map((thread) => (thread.id === result.thread.id ? result.thread : thread)));
-      setChatMessages(result.messages);
+      setChatMessages((prev) => mergeChatMessages(prev, result.messages));
+      await resync(activeProject.id, threadId);
     } catch (error: any) {
       showToast('Message Failed', error?.message ?? 'Unable to send the message.', 'error');
     }
