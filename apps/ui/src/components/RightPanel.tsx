@@ -1,9 +1,11 @@
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useStore } from '../store';
 import { adapterMeta } from '../lib/data';
 import { logTypeColor } from '../store';
+import { AdapterIcon } from './AdapterIcon';
 import { Icon } from '../lib/icons';
-import type { LogEntry } from '../lib/types';
+import type { ConversationTodoEntry, LogEntry } from '../lib/types';
 
 
 function HighlightJson({ json }: { json: string }) {
@@ -60,8 +62,65 @@ function LogLine({ entry }: { entry: LogEntry }) {
   );
 }
 
+/**
+ * One entry of the agent's own plan.
+ *
+ * The shape mirrors what the agent reported rather than a workflow task, because
+ * it is the agent's own list and not something OpenCLI scheduled.
+ */
+function PlanRow({ entry }: { entry: ConversationTodoEntry }) {
+  const done = entry.status === 'completed';
+  const cancelled = entry.status === 'cancelled';
+  const active = entry.status === 'in_progress';
+
+  return (
+    <div className="flex items-start gap-2.5 rounded-md border border-app-border/70 bg-app-bg/60 px-3 py-2.5">
+      <Icon
+        name={done ? 'circle-check' : cancelled ? 'circle-slash' : active ? 'circle-dot' : 'circle'}
+        className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+          done ? 'text-emerald-400' : cancelled ? 'text-app-text/50' : active ? 'text-app-primary' : 'text-app-text'
+        }`}
+      />
+      <div className="min-w-0 flex-1">
+        <div
+          className={`text-xs leading-relaxed ${
+            done ? 'text-app-text line-through opacity-60' : cancelled ? 'text-app-text/50 line-through' : 'text-app-textStrong'
+          }`}
+        >
+          {entry.content}
+        </div>
+        {active && <div className="text-[9px] text-app-primary mt-1">in progress</div>}
+      </div>
+    </div>
+  );
+}
+
 export function RightPanel() {
-  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject, activeWorkflow } = useStore();
+  const { rightTab, switchRightTab, logs, clearLogs, terminalRef, tasks, activeProject, activeWorkflow, chatMessages } =
+    useStore();
+
+  /**
+   * The plan the agent is working through right now.
+   *
+   * An agent writes its own todo list mid-conversation, and that list only ever
+   * existed inside the chat transcript, so this panel showed nothing while the
+   * person was watching the agent tick items off one by one. The newest list
+   * wins: it is the one the agent is actually on, and an older list from a
+   * finished turn would be noise.
+   */
+  const agentPlan = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      if (!message) continue;
+      const todo = message.items?.find((item) => item.kind === 'todo');
+      if (todo && todo.kind === 'todo' && todo.items.length > 0) {
+        return { agentId: message.agentId, entries: todo.items };
+      }
+    }
+    return undefined;
+  }, [chatMessages]);
+
+  const planDone = agentPlan?.entries.filter((entry) => entry.status === 'completed').length ?? 0;
 
   const todoGroups = {
     progress: tasks.filter((task) => ['RUNNING', 'ASK', 'REVIEW'].includes(task.status)),
@@ -142,20 +201,54 @@ export function RightPanel() {
         </button>
       </div>
 
-      {/* AI Todo List — backed by workflow task state */}
+      {/* Todo: the agent's own plan first, then the workflow's task state. */}
       {rightTab === 'todo' && (
         <div className="flex-1 overflow-y-auto p-4 bg-[#09090b]">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <div className="text-sm font-semibold text-app-textStrong">Agent Todo</div>
-              <div className="text-[10px] text-app-text mt-0.5">Live workflow task state</div>
+              <div className="text-sm font-semibold text-app-textStrong">Todo</div>
+              <div className="text-[10px] text-app-text mt-0.5">
+                {agentPlan ? 'Agent plan and workflow tasks' : 'Live workflow task state'}
+              </div>
             </div>
-            <span className="text-[10px] font-mono text-app-text bg-app-bg border border-app-border rounded px-2 py-1">
-              {todoGroups.done.length}/{tasks.length}
-            </span>
+            {agentPlan ? (
+              <span className="text-[10px] font-mono text-app-text bg-app-bg border border-app-border rounded px-2 py-1">
+                {planDone}/{agentPlan.entries.length}
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono text-app-text bg-app-bg border border-app-border rounded px-2 py-1">
+                {todoGroups.done.length}/{tasks.length}
+              </span>
+            )}
           </div>
 
           <div className="space-y-4">
+            {agentPlan && (
+              <section>
+                <div className="flex items-center gap-2 mb-2 text-[10px] uppercase tracking-wider font-semibold text-app-primary">
+                  {agentPlan.agentId ? (
+                    <AdapterIcon id={agentPlan.agentId} className="w-3.5 h-3.5" />
+                  ) : (
+                    <Icon name="bot" className="w-3.5 h-3.5" />
+                  )}
+                  {agentPlan.agentId ? `${adapterMeta(agentPlan.agentId).name} plan` : 'Agent plan'}
+                </div>
+                <div className="space-y-1.5">
+                  {agentPlan.entries.map((entry) => (
+                    <PlanRow key={entry.id} entry={entry} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {(agentPlan || tasks.length > 0) && (
+              <div className="flex items-center gap-2 pt-1">
+                <div className="h-px flex-1 bg-app-border" />
+                <span className="text-[9px] uppercase tracking-wider text-app-text/60">Workflow tasks</span>
+                <div className="h-px flex-1 bg-app-border" />
+              </div>
+            )}
+
             {(['progress', 'todo', 'done'] as const).map((status) => {
               const items = todoGroups[status];
               if (!items.length) return null;

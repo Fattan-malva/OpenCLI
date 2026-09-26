@@ -1108,3 +1108,67 @@ describe('the agent turn does not repeat the person', () => {
     ).toEqual([]);
   });
 });
+
+describe('the agent todo list reaches the conversation', () => {
+  const todoPart = (todos: unknown[]) => ({
+    type: 'message.part.updated',
+    properties: {
+      part: { id: 'prt_todo', type: 'tool', tool: 'todowrite', state: { status: 'completed', input: { todos } } },
+    },
+  });
+
+  it('turns a todowrite call into a todo item with its entries', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push(
+        todoPart([
+          { content: 'Rewrite index.html', status: 'in_progress' },
+          { content: 'Audit against the pre-flight', status: 'pending' },
+          { content: 'Verify image URLs', status: 'completed' },
+        ]),
+      ),
+    );
+
+    const todo = items.find((item) => item.kind === 'todo');
+    expect(todo).toBeDefined();
+    if (todo?.kind !== 'todo') return;
+    expect(todo.items).toHaveLength(3);
+    // The statuses are the agent's own, so a person can see what it is on.
+    expect(todo.items.map((entry) => entry.status)).toEqual(['in_progress', 'pending', 'completed']);
+  });
+
+  it('replaces the earlier list instead of stacking a second one', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const first = applyEvents([], translator.push(todoPart([{ content: 'Step one', status: 'pending' }])));
+    const second = applyEvents(
+      first,
+      translator.push(
+        todoPart([
+          { content: 'Step one', status: 'completed' },
+          { content: 'Step two', status: 'in_progress' },
+        ]),
+      ),
+    );
+
+    // One live list, because the agent has one plan. Two would read as two
+    // competing checklists.
+    expect(second.filter((item) => item.kind === 'todo')).toHaveLength(1);
+    const todo = second.find((item) => item.kind === 'todo');
+    if (todo?.kind !== 'todo') return;
+    expect(todo.items).toHaveLength(2);
+    expect(todo.items[0]?.status).toBe('completed');
+  });
+
+  it('shows the list on a tool row too, not only in the plan panel', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push(todoPart([{ content: 'Do the thing', status: 'pending' }])),
+    );
+    // The tool call itself stays in the transcript as a tool, so the transcript
+    // still shows what the agent ran.
+    expect(items.some((item) => item.kind === 'tool' && item.name === 'todowrite')).toBe(true);
+    expect(items.some((item) => item.kind === 'todo')).toBe(true);
+  });
+});
