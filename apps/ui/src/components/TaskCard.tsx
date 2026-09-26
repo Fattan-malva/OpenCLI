@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { STATUS, useStore } from '../store';
 import { adapterMeta } from '../lib/data';
+import { AdapterIcon } from './AdapterIcon';
 import { Icon } from '../lib/icons';
 import { api } from '../lib/api';
 import type { Task } from '../lib/types';
@@ -268,7 +269,7 @@ export function TaskCard({ task }: { task: Task }) {
 
         <div className="flex flex-wrap items-center gap-4 text-xs mt-1 pt-3 border-t border-app-border/50">
           <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${agentInfo.bg} ${agentInfo.border} ${agentInfo.color}`}>
-            <Icon name={agentInfo.icon} className="w-3.5 h-3.5" />
+            <AdapterIcon id={task.agentId ?? 'system'} className="w-3.5 h-3.5" />
             <span className="font-medium">{agentInfo.name}</span>
           </div>
           <div className="flex items-center gap-1.5 text-app-text">

@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   ConfirmationPolicy,
   ChatThread,
+  ConversationItem,
   GlobalStatus,
   InteractionMode,
   LogEntry,
@@ -104,6 +105,23 @@ export interface Store {
   createChat: (input?: { text?: string; title?: string; adapterId?: string; mode?: string }) => Promise<void>;
   selectChatThread: (threadId: string) => Promise<void>;
   sendChat: (text: string, adapterId?: string, mode?: string, interactionMode?: InteractionMode, confirmationPolicy?: ConfirmationPolicy) => Promise<void>;
+  /**
+   * Answers a question or permission the agent is waiting on.
+   *
+   * This does not send a message. The answer goes back to the running session
+   * and the agent continues the work it was already doing; sending it as a chat
+   * message instead would make the agent read the answer as a new request and
+   * restart its reasoning.
+   */
+  answerRequest: (messageId: string, answer: string) => Promise<void>;
+  /**
+   * Deletes every project, thread and history row.
+   *
+   * Settings and the PIN are kept, and every running session is stopped first, so
+   * this clears the user's work without also locking them out or leaving stray
+   * processes writing to deleted rows.
+   */
+  resetDatabase: (confirm: string) => Promise<boolean>;
   stopChat: () => Promise<void>;
   deleteChatThread: (threadId: string) => Promise<void>;
   executeChatPlan: () => Promise<void>;
@@ -123,14 +141,51 @@ function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]): Cha
   const byId = new Map(current.map((message) => [message.id, message]));
   for (const message of incoming) {
     const existing = byId.get(message.id);
-    byId.set(
-      message.id,
-      existing && (existing.text?.length ?? 0) > (message.text?.length ?? 0)
-        ? { ...message, text: existing.text }
-        : message,
-    );
+    if (!existing) {
+      byId.set(message.id, message);
+      continue;
+    }
+    // A streamed reply is ahead of the transcript the server answered with, so
+    // the longer text and the richer item list both win. Everything else about
+    // the message comes from the server, which owns it.
+    byId.set(message.id, {
+      ...message,
+      text: (existing.text?.length ?? 0) > (message.text?.length ?? 0) ? existing.text : message.text,
+      items: (existing.items?.length ?? 0) > (message.items?.length ?? 0) ? existing.items : message.items,
+    });
   }
   return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * A one-line, plain-text view of a turn, for the task board's live output.
+ *
+ * This is a summary for a place that has no room for structure, not the
+ * transcript. The transcript renders items properly; here each item is reduced
+ * to a readable line so the board stays readable without any glyph vocabulary.
+ */
+function describeItemsForTask(items?: ConversationItem[]): string {
+  if (!items || items.length === 0) return '';
+  return items
+    .map((item) => {
+      if (item.kind === 'message') return item.text;
+      if (item.kind === 'thinking') return `[reasoning] ${item.text}`;
+      if (item.kind === 'tool') {
+        const target = item.command ?? item.title ?? '';
+        return `[tool] ${item.name}${target ? ` ${target}` : ''}`;
+      }
+      if (item.kind === 'skill') return `[skill] ${item.name}`;
+      if (item.kind === 'todo') return `[todo] ${item.items.filter((entry) => entry.status === 'completed').length}/${item.items.length}`;
+      if (item.kind === 'file_change') return `[file] ${item.action} ${item.path}`;
+      if (item.kind === 'question') return `[question] ${item.question}`;
+      if (item.kind === 'permission') return `[permission] ${item.command ?? item.tool ?? ''}`;
+      if (item.kind === 'status') return `[status] ${item.label}`;
+      if (item.kind === 'error') return `[error] ${item.message}`;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .slice(-20_000);
 }
 
 const COLOR_CLASSES: Record<GlobalStatus['color'], string> = {
@@ -455,6 +510,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * Clears the database from the UI side too.
+   *
+   * Everything held in memory is project-scoped, so leaving any of it behind
+   * would show the user a workspace that no longer exists, with threads and tasks
+   * that were deleted underneath. The app returns to the project list, which is
+   * the honest place to be when there are no projects.
+   */
+  const resetDatabase = useCallback(async (confirm: string): Promise<boolean> => {
+    try {
+      await api.resetDatabase(confirm);
+    } catch (error: any) {
+      showToast('Reset Failed', error?.message ?? 'The database could not be reset.', 'error');
+      return false;
+    }
+    setProjects([]);
+    setChatThreads([]);
+    setChatMessages([]);
+    setChatRequests({});
+    setTasks([]);
+    setWorkflows([]);
+    setActiveWorkflow(null);
+    setLogs([]);
+    setSessionsState([]);
+    setCapabilities({});
+    loadedThreadRef.current = null;
+    setActiveProject(null);
+    setActiveThreadId(null);
+    setPage('workspace');
+    setScreen('projects');
+    showToast('Database Reset', 'All projects, threads and history were deleted.', 'success');
+    return true;
+  }, [showToast]);
+
   const loadAdapters = useCallback(async (): Promise<void> => {
     try {
       setAdapters(await api.listAdapters());
@@ -591,6 +680,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       showToast('Message Failed', error?.message ?? 'Unable to send the message.', 'error');
     }
   }, [activeProject?.id, activeThreadId, showToast]);
+
+  const answerRequest = useCallback(async (messageId: string, answer: string): Promise<void> => {
+    if (!activeProject || !activeThreadId) return;
+    // The prompt disappears as soon as the answer is on its way, so the person
+    // cannot submit the same answer twice while the agent is still working.
+    setChatRequests((prev) => {
+      if (!prev[messageId]) return prev;
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+    try {
+      await api.answerChatRequest(activeProject.id, activeThreadId, messageId, answer);
+    } catch (error: any) {
+      showToast('Answer Failed', error?.message ?? 'The agent did not accept the answer.', 'error');
+      // Put the question back so it can be answered again.
+      const restored = chatMessages.find((message) => message.id === messageId)?.request;
+      if (restored) setChatRequests((prev) => ({ ...prev, [messageId]: restored }));
+    }
+  }, [activeProject?.id, activeThreadId, chatMessages, showToast]);
 
   const stopChat = useCallback(async (): Promise<void> => {
     if (!activeProject || !activeThreadId) return;
@@ -867,9 +976,61 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   : task,
               ));
             }
+          } else if (event.type === 'chat.turn_item') {
+            /**
+             * The server publishes the whole folded item list with every event.
+             *
+             * Taking the list as sent, rather than re-applying the event here, is
+             * what keeps the screen identical to what a reload will show: there
+             * is no second implementation of the fold in the browser that could
+             * drift from the server's.
+             */
+            const items = Array.isArray(event.payload?.items)
+              ? (event.payload.items as ConversationItem[])
+              : undefined;
+            const text = typeof event.payload?.text === 'string' ? event.payload.text : undefined;
+            const answered = typeof event.payload?.answered === 'string' ? event.payload.answered : undefined;
+            if (answered) {
+              // The person answered, so the question stops being offered.
+              setChatRequests((prev) => {
+                if (!prev[chatMessageId]) return prev;
+                const next = { ...prev };
+                delete next[chatMessageId];
+                return next;
+              });
+            }
+            if (items) {
+              setChatMessages((prev) =>
+                prev.map((item) =>
+                  item.id === chatMessageId
+                    ? { ...item, status: 'streaming', items, ...(text ? { text } : {}) }
+                    : item,
+                ),
+              );
+            }
+            if (event.taskId) {
+              setTasks((prev) =>
+                prev.map((task) =>
+                  task.id === event.taskId ? { ...task, liveOutput: describeItemsForTask(items) } : task,
+                ),
+              );
+            }
           } else if (event.type === 'chat.assistant_completed') {
+            const items = Array.isArray(event.payload?.items)
+              ? (event.payload.items as ConversationItem[])
+              : undefined;
+            const text = typeof event.payload?.text === 'string' ? event.payload.text : undefined;
             setChatMessages((prev) =>
-              prev.map((item) => (item.id === chatMessageId ? { ...item, status: 'complete' } : item)),
+              prev.map((item) =>
+                item.id === chatMessageId
+                  ? {
+                      ...item,
+                      status: 'complete',
+                      ...(items ? { items } : {}),
+                      ...(text ? { text } : {}),
+                    }
+                  : item,
+              ),
             );
           } else if (event.type === 'chat.assistant_failed') {
             setChatMessages((prev) =>
@@ -1135,6 +1296,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createChat,
     selectChatThread,
     sendChat,
+    answerRequest,
+    resetDatabase,
     stopChat,
     deleteChatThread,
     executeChatPlan,

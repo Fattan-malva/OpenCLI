@@ -5,7 +5,7 @@ import { useStore } from '../store';
 import type { SystemSettings } from '../lib/types';
 
 export function SettingsPage({ active }: { active: boolean }) {
-  const { showToast, addLog } = useStore();
+  const { showToast, addLog, resetDatabase } = useStore();
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<SystemSettings>({
     maxParallelAgents: 4,
@@ -16,6 +16,12 @@ export function SettingsPage({ active }: { active: boolean }) {
   const [newPin, setNewPin] = useState('');
   const [saving, setSaving] = useState(false);
   const [pinBusy, setPinBusy] = useState(false);
+  // Resetting is destructive and irreversible, so it is two deliberate actions:
+  // reveal the control, then type the word. A single button is one misclick away
+  // from deleting someone's work.
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetBusy, setResetBusy] = useState(false);
 
   useEffect(() => {
     if (!active) return;
@@ -54,6 +60,17 @@ export function SettingsPage({ active }: { active: boolean }) {
       showToast('PIN Change Failed', e?.message ?? 'Gagal mengganti PIN.', 'error');
     }
     setPinBusy(false);
+  };
+
+  const doReset = async () => {
+    setResetBusy(true);
+    const ok = await resetDatabase(resetConfirmText.trim());
+    if (ok) {
+      setConfirmingReset(false);
+      setResetConfirmText('');
+      addLog('config.updated', 'Database reset by user', 'system');
+    }
+    setResetBusy(false);
   };
 
   if (loading) {
@@ -177,6 +194,62 @@ export function SettingsPage({ active }: { active: boolean }) {
                 </button>
               </div>
             </div>
+          </section>
+
+          <section className="border border-rose-500/30 rounded-xl bg-rose-500/5 p-6">
+            <h2 className="text-sm font-semibold text-rose-300 mb-1 flex items-center gap-2">
+              <Icon name="alert-triangle" className="w-4 h-4" />
+              Reset database
+            </h2>
+            <p className="text-xs text-app-text mb-4">
+              Deletes every project, conversation, task and history record from this machine. Adapter sessions
+              are stopped first. Your PIN and settings are kept, so you stay signed in.
+            </p>
+            {confirmingReset ? (
+              <div className="space-y-3">
+                <label className="block text-app-text text-xs font-medium">
+                  Type <span className="font-mono text-rose-300">RESET</span> to confirm
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={resetConfirmText}
+                    onChange={(e) => setResetConfirmText(e.target.value)}
+                    placeholder="RESET"
+                    className="flex-1 bg-app-bg border border-app-border rounded px-3 py-2 text-app-textStrong focus:outline-none focus:border-rose-500 font-mono"
+                  />
+                  <button
+                    onClick={doReset}
+                    disabled={resetConfirmText.trim().toUpperCase() !== 'RESET' || resetBusy}
+                    className="px-4 py-2 rounded bg-rose-600 hover:bg-rose-500 text-white text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-40"
+                  >
+                    {resetBusy ? (
+                      <Icon name="loader-2" className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Icon name="trash-2" className="w-4 h-4" />
+                    )}
+                    Delete everything
+                  </button>
+                  <button
+                    onClick={() => {
+                      setConfirmingReset(false);
+                      setResetConfirmText('');
+                    }}
+                    className="px-4 py-2 rounded bg-app-border hover:bg-app-hover text-app-textStrong text-sm font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmingReset(true)}
+                className="px-4 py-2 rounded bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                <Icon name="trash-2" className="w-4 h-4" />
+                Reset database
+              </button>
+            )}
           </section>
 
           <div className="flex justify-end">

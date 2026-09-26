@@ -9,5 +9,6 @@ import { migration008 } from './008-chat-message-meta.js';
 import { migration009 } from './009-chat-broadcast.js';
 import { migration010 } from './010-chat-routing.js';
 import { migration011 } from './011-routing-spec.js';
+import { migration012 } from './012-chat-items.js';
 
-export const migrations = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011];
+export const migrations = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012];

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { useStore } from '../store';
 import { adapterMeta } from '../lib/data';
+import { AdapterIcon } from './AdapterIcon';
 import { Icon } from '../lib/icons';
 import { api } from '../lib/api';
 import type { AdapterCapabilities, ConfirmationPolicy, InteractionMode } from '../lib/types';
@@ -47,7 +48,8 @@ function ChipControl({
   open,
   onClick,
 }: {
-  icon: string;
+  /** A rendered mark rather than an icon name, so an adapter can show its brand. */
+  icon: ReactNode;
   label: string;
   open: boolean;
   onClick: () => void;
@@ -61,7 +63,7 @@ function ChipControl({
           : 'border-app-border bg-app-surface text-app-text hover:bg-app-hover'
       }`}
     >
-      <Icon name={icon} className="w-3.5 h-3.5" />
+      {icon}
       <span>{label}</span>
       <Icon name="chevron-right" className={`w-3 h-3 transition-transform ${open ? '-rotate-90' : 'rotate-90'}`} />
     </button>
@@ -307,7 +309,7 @@ export function ChatComposer() {
                       selected ? 'bg-app-primary/10' : 'hover:bg-app-hover'
                     }`}
                   >
-                    <Icon name={meta.icon} className={`w-4 h-4 shrink-0 ${meta.color}`} />
+                    <AdapterIcon id={entry.adapterId} className="w-4 h-4 shrink-0" />
                     <span className="text-xs text-app-textStrong">{entry.adapterId}</span>
                     <span className="text-[10px] font-mono text-app-text">/</span>
                     <span className="text-[10px] font-mono text-app-primary">{entry.modeId}</span>
@@ -351,7 +353,13 @@ export function ChatComposer() {
           {/* Which single adapter this conversation talks to. */}
           <div className="relative">
             <ChipControl
-              icon={chatAdapterId ? adapterMeta(chatAdapterId).icon : 'bot'}
+              icon={
+                chatAdapterId ? (
+                  <AdapterIcon id={chatAdapterId} className="w-3.5 h-3.5" />
+                ) : (
+                  <Icon name="bot" className="w-3.5 h-3.5" />
+                )
+              }
               label={chatAdapterId ? adapterMeta(chatAdapterId).name : 'No adapter'}
               open={openMenu === 'adapter'}
               onClick={() => setOpenMenu(openMenu === 'adapter' ? null : 'adapter')}
@@ -378,7 +386,7 @@ export function ChatComposer() {
                         selected ? 'bg-app-primary/10' : 'hover:bg-app-hover'
                       }`}
                     >
-                      <Icon name={meta.icon} className={`w-4 h-4 shrink-0 ${meta.color}`} />
+                      <AdapterIcon id={session.adapterId} className="w-4 h-4 shrink-0" />
                       <span className="text-xs text-app-textStrong truncate">{meta.name}</span>
                       <span className="text-[10px] font-mono text-app-text">{session.adapterId}</span>
                       {selected && (
@@ -436,7 +444,7 @@ export function ChatComposer() {
           )}
 
           <div className="relative">
-            <ChipControl icon={modeOption.icon} label={modeOption.label} open={openMenu === 'mode'} onClick={() => setOpenMenu(openMenu === 'mode' ? null : 'mode')} />
+            <ChipControl icon={<Icon name={modeOption.icon} className="w-3.5 h-3.5" />} label={modeOption.label} open={openMenu === 'mode'} onClick={() => setOpenMenu(openMenu === 'mode' ? null : 'mode')} />
             {openMenu === 'mode' && (
               <div className="absolute left-0 bottom-full mb-1 w-72 z-20 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/20 p-1.5 space-y-0.5">
                 {INTERACTION_MODES.map((option) => {
@@ -466,7 +474,7 @@ export function ChatComposer() {
           </div>
 
           <div className="relative">
-            <ChipControl icon={policyOption.icon} label={policyOption.label} open={openMenu === 'policy'} onClick={() => setOpenMenu(openMenu === 'policy' ? null : 'policy')} />
+            <ChipControl icon={<Icon name={policyOption.icon} className="w-3.5 h-3.5" />} label={policyOption.label} open={openMenu === 'policy'} onClick={() => setOpenMenu(openMenu === 'policy' ? null : 'policy')} />
             {openMenu === 'policy' && (
               <div className="absolute left-0 bottom-full mb-1 w-72 z-20 rounded-lg border border-app-border bg-app-surface shadow-lg shadow-black/20 p-1.5 space-y-0.5">
                 {POLICIES.map((option) => {

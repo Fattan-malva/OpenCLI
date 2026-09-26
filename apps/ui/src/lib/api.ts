@@ -69,6 +69,12 @@ export const api = {
       body: JSON.stringify(settings),
     });
   },
+  resetDatabase(confirm: string) {
+    return request<{ success: boolean; projects: number }>('/settings/reset-database', {
+      method: 'POST',
+      body: JSON.stringify({ confirm }),
+    });
+  },
   listProjects() {
     return request<ProjectRecord[]>('/projects');
   },
@@ -336,6 +342,18 @@ export const api = {
     return request<{ started: boolean; workflowId?: string; errors?: string[] }>(
       `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/execute`,
       { method: 'POST' },
+    );
+  },
+  /**
+   * Answers a question or permission on the running turn.
+   *
+   * Kept apart from `sendChatMessage` on purpose: this continues the agent's
+   * current work, whereas sending a message starts something new.
+   */
+  answerChatRequest(projectId: string, threadId: string, messageId: string, answer: string) {
+    return request<{ delivered: boolean; resumed: boolean; error?: string }>(
+      `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/answer`,
+      { method: 'POST', body: JSON.stringify({ answer }) },
     );
   },
   stopChatThread(projectId: string, threadId: string) {

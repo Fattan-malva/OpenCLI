@@ -1,8 +1,14 @@
 import type { EventBus } from '@opencli/events';
 import type { OpenCLIRepository } from '@opencli/db';
-import type { ChatRequest, ConfirmationPolicy } from '@opencli/domain';
-import type { ProtocolActivity } from './sessionProtocol.js';
-import { setSessionMode, setSessionModel, talkToSession, sendAnswerToRequest, type TurnResult } from './sessions.js';
+import type {
+  ChatRequest,
+  ConfirmationPolicy,
+  ConversationItem,
+  ConversationToolItem,
+} from '@opencli/domain';
+import type { AgentEvent } from './protocol/agentEvent.js';
+import { applyEvents, conversationText, pendingRequest } from './conversation/turnState.js';
+import { setSessionMode, setSessionModel, talkToSession, sendAnswerToRequest, isSessionBusy, type TurnResult } from './sessions.js';
 import { shouldAutoApprove } from './settings.js';
 
 export interface ChatRuntimeDeps {
@@ -25,32 +31,8 @@ export interface AgentTurnOptions {
   policy?: ConfirmationPolicy;
 }
 
-export function extractPatchRange(detail?: string): string {
-  const match = (detail ?? '').match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,(\d+))?/m);
-  if (!match) return '';
-  const start = Number(match[1]);
-  if (!Number.isFinite(start)) return '';
-  const count = match[2] ? Number(match[2]) : NaN;
-  return count > 0 ? ` (lines ${start}-${start + count - 1})` : ` (line ${start})`;
-}
-
-export function formatActivity(activity: ProtocolActivity): string {
-  const detail = activity.detail ? ` ${activity.detail}` : '';
-  if (activity.kind === 'tool') {
-    return `⏺ ${activity.label}(${detail.trim()})\n`;
-  }
-  if (activity.kind === 'reasoning') {
-    return `✳ ${activity.label}${detail}\n`;
-  }
-  if (activity.kind === 'file') {
-    const action = activity.status === 'changed' ? 'modified' : activity.status ?? 'changed';
-    return `✎ ${action} ${activity.label}${extractPatchRange(activity.detail)}\n`;
-  }
-  if (activity.kind === 'status') {
-    if (activity.status === 'retry') return `↻ retry: ${activity.detail ?? 'provider unavailable'}\n`;
-    return '';
-  }
-  return `${activity.status === 'error' ? '!' : '\u2713'} ${activity.label}${detail}\n`;
+export function toolTitle(name: string, title?: string): string {
+  return title?.trim() || name || 'tool';
 }
 
 export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions): Promise<TurnResult> {
@@ -97,24 +79,80 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
     }
   }
 
-  // A CLI reports an event both in its own output stream and through the
-  // runtime's activity channel, so the same line can arrive twice. Tracking the
-  // tail lets an exact repeat be dropped without hiding genuinely repeated
-  // content further up the transcript.
-  let tail = '';
+  /**
+   * The conversation is the single source of truth for this turn.
+   *
+   * Every normalized event is folded into `items` first, and the transcript is
+   * rebuilt from those items. The previous design appended formatted CLI lines
+   * to one text column, which meant a tool call, a status line and prose all had
+   * to be flattened into text and re-parsed by the UI to be shown as anything
+   * other than a wall of glyphs.
+   */
+  let items: ConversationItem[] = deps.db.getChatMessage(messageId)?.items ?? [];
 
-  const append = (chunk: string, extra?: Record<string, unknown>) => {
-    if (chunk && chunk === tail) return;
-    tail = chunk.endsWith('\n') || !chunk ? '' : chunk;
+  /**
+   * Persists the folded conversation and publishes only what changed.
+   *
+   * The whole item list is written because items arrive out of order relative to
+   * storage (a tool completes after a later message has started), so the last
+   * write has to win. `publish` is false for the initial fold, which only exists
+   * to seed the reducer.
+   */
+  const commit = (next: ConversationItem[]) => {
+    items = next;
+    deps.db.saveChatMessageItems(messageId, items);
+  };
 
-    deps.db.appendChatMessageText(messageId, chunk);
+  const publish = (event: AgentEvent, snapshot: ConversationItem[]) => {
     void deps.eventBus.emit({
-      type: 'chat.assistant_output',
+      type: 'chat.turn_item',
       projectId,
       taskId,
       agentId: adapterId,
-      payload: { threadId, messageId, adapterId, taskId, role, text: chunk, ...extra },
+      payload: { threadId, messageId, adapterId, taskId, role, event, items: snapshot },
     });
+  };
+
+  /**
+   * Control requests are answered through the turn, never as a new message.
+   *
+   * Auto-approval is the only case that resolves without a person, and it is
+   * recorded as a tool-shaped item so the transcript still shows that something
+   * was allowed on the user's behalf.
+   */
+  const handleControl = (kind: 'question' | 'permission', request: ChatRequest) => {
+    if (shouldAutoApprove(policy, request)) {
+      const label = request.command ?? request.message ?? 'request';
+      const approved: ConversationToolItem = {
+        kind: 'tool',
+        id: `autoapprove:${request.requestId ?? kind}`,
+        status: 'completed',
+        seq: items.length,
+        name: label,
+        title: 'auto-approved',
+        input: label,
+        output: '',
+      };
+      commit([...items, approved]);
+      publish(
+        {
+          type: 'tool',
+          phase: 'complete',
+          id: approved.id,
+          seq: approved.seq,
+          turnId: '',
+          adapterId,
+          timestamp: Date.now(),
+          data: { name: approved.name, title: approved.title, input: approved.input, status: 'completed' },
+        },
+        items,
+      );
+      void sendAnswerToRequest(projectId, adapterId, 'yes, continue');
+      return;
+    }
+    // Held open: the request stays in `request` on the message, and the turn
+    // continues once the answer arrives on the same turn.
+    deps.db.updateChatMessage(messageId, { request, status: 'awaiting_input' });
   };
 
   const result = await talkToSession({
@@ -125,11 +163,16 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
     mode,
     model,
     handlers: {
-      onText: (chunk) => append(chunk),
-      onTool: (tool) => append(formatActivity({ kind: 'tool', label: tool })),
-      onActivity: (activity) => {
-        const line = formatActivity(activity);
-        if (line) append(line);
+      onEvent: (event) => {
+        const next = applyEvents(items, [event]);
+        if (next === items) return;
+        commit(next);
+        publish(event, next);
+
+        if (event.type === 'question' || event.type === 'permission') {
+          const request = deps.db.getChatMessage(messageId)?.request;
+          if (request) handleControl(event.type, request);
+        }
       },
       onMeta: (meta) => {
         deps.db.mergeChatMessageMeta(messageId, meta);
@@ -141,32 +184,39 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
           payload: { threadId, messageId, adapterId, taskId, role, meta },
         });
       },
-      onRequest: (request: ChatRequest) => {
-        if (shouldAutoApprove(policy, request)) {
-          append(`\n[allow-all] auto-approved: ${request.command ?? request.message ?? ''}\n`, { request, autoApproved: true });
-          void sendAnswerToRequest(projectId, adapterId, 'yes, continue');
-          return;
-        }
-        deps.db.updateChatMessage(messageId, { request, status: 'streaming' });
-        append(`\n[${request.type}] ${request.command ?? request.message}\n`, { request });
-      },
     },
   });
 
+  // The message's text column is prose only, so a copy of the reply or a later
+  // planning pass does not carry tool output and status glyphs with it.
+  const finalItems = items;
+  const prose = conversationText(finalItems);
+  const stillPending = pendingRequest(finalItems);
+
   if (result.ok) {
-    deps.db.appendChatMessageText(messageId, '✓ turn finished\n');
-    deps.db.updateChatMessage(messageId, { status: 'complete', request: undefined });
+    // A request that is still pending outlives this turn: it is answered on the
+    // turn that follows, and clearing it here would make the question vanish
+    // from the transcript before anyone could answer it.
+    deps.db.updateChatMessage(messageId, {
+      text: prose,
+      items: finalItems,
+      status: stillPending ? 'awaiting_input' : 'complete',
+      request: stillPending ? deps.db.getChatMessage(messageId)?.request : undefined,
+    });
     void deps.eventBus.emit({
       type: 'chat.assistant_completed',
       projectId,
       taskId,
       agentId: adapterId,
-      payload: { threadId, messageId, adapterId, taskId, role, text: result.text },
+      payload: { threadId, messageId, adapterId, taskId, role, text: prose, items: finalItems },
     });
   } else {
     const detail = result.error ?? 'The agent turn did not complete';
-    deps.db.appendChatMessageText(messageId, `\n! ${detail}\n`);
-    deps.db.updateChatMessage(messageId, { status: result.timedOut ? 'interrupted' : 'error' });
+    deps.db.updateChatMessage(messageId, {
+      text: prose,
+      items: finalItems,
+      status: result.timedOut ? 'interrupted' : 'error',
+    });
     void deps.eventBus.emit({
       type: result.timedOut ? 'chat.turn_interrupted' : 'chat.assistant_failed',
       projectId,
@@ -177,4 +227,88 @@ export async function runAgentTurn(deps: ChatRuntimeDeps, opts: AgentTurnOptions
   }
 
   return result;
+}
+
+export interface AnswerRequestOptions {
+  projectId: string;
+  threadId: string;
+  adapterId: string;
+  adapterName?: string;
+  /** Which message is holding the question or permission open. */
+  messageId: string;
+  /** The answer as the person gave it, or the option they picked. */
+  answer: string;
+  taskId?: string;
+  mode?: string;
+  model?: { provider: string; model: string; spec?: string };
+  confirmationPolicy?: ConfirmationPolicy;
+}
+
+/**
+ * Answers a question or permission the agent asked.
+ *
+ * This is deliberately not the same path as sending a chat message. The agent
+ * stopped and asked; its answer has to go back to the session, and the agent
+ * then carries on with the work it was already doing. Routing the answer through
+ * "send a message" instead makes the agent treat the answer as a fresh request,
+ * which is why approving a tool used to restart the turn from scratch.
+ *
+ * When no turn is in flight — the app was restarted, or the adapter was
+ * restarted — the answer is sent as a normal prompt so the person is not left
+ * with a question that can never be answered.
+ */
+export async function answerChatRequest(
+  deps: ChatRuntimeDeps,
+  opts: AnswerRequestOptions,
+): Promise<{ delivered: boolean; resumed: boolean; error?: string }> {
+  const { projectId, threadId, adapterId, messageId, answer } = opts;
+  const message = deps.db.getChatMessage(messageId);
+  if (!message) return { delivered: false, resumed: false, error: 'Message not found' };
+  if (!message.request) return { delivered: false, resumed: false, error: 'This message is not waiting for an answer' };
+
+  // Resolve the request in the transcript first, so the question stops being
+  // offered even if delivery below fails and has to be retried.
+  const items = (message.items ?? []).map((item) => {
+    if ((item.kind === 'question' || item.kind === 'permission') && item.status === 'pending') {
+      return { ...item, status: 'completed' as const, answer };
+    }
+    return item;
+  });
+  deps.db.updateChatMessage(messageId, {
+    items,
+    request: undefined,
+    status: 'complete',
+    text: conversationText(items),
+  });
+
+  if (isSessionBusy(projectId, adapterId)) {
+    const delivered = await sendAnswerToRequest(projectId, adapterId, answer);
+    if (delivered) {
+      void deps.eventBus.emit({
+        type: 'chat.turn_item',
+        projectId,
+        taskId: opts.taskId,
+        agentId: adapterId,
+        payload: { threadId, messageId, adapterId, taskId: opts.taskId, role: 'agent', items, answered: answer },
+      });
+      return { delivered: true, resumed: false };
+    }
+    return { delivered: false, resumed: false, error: 'The agent session did not accept the answer' };
+  }
+
+  // No turn to answer into, so the answer becomes the next turn. The agent
+  // resumes from its own session history, which still holds the question.
+  const resumed = await runAgentTurn(deps, {
+    projectId,
+    threadId,
+    adapterId,
+    adapterName: opts.adapterName,
+    messageId,
+    text: answer,
+    taskId: opts.taskId,
+    mode: opts.mode,
+    model: opts.model,
+    policy: opts.confirmationPolicy,
+  });
+  return { delivered: true, resumed: true, error: resumed.ok ? undefined : resumed.error };
 }

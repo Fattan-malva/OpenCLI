@@ -8,10 +8,13 @@ import {
   parseOpencodeEvent,
   parseSessionLine,
 } from '../apps/server/src/sessionProtocol.js';
-import { formatActivity } from '../apps/server/src/chatRuntime.js';
+import { createEventFactory } from '../apps/server/src/protocol/agentEvent.js';
+import { createClaudeTranslator } from '../apps/server/src/protocol/claudeEvents.js';
+import { createOpencodeTranslator } from '../apps/server/src/protocol/opencodeEvents.js';
+import { applyEvents, conversationText, pendingRequest } from '../apps/server/src/conversation/turnState.js';
 import { assignDefaultAgents, buildPlannerPrompt, heuristicPlannerDecision, parseExecutionPlan, parsePlannerDecision } from '../apps/server/src/planner.js';
 import { createWorkflowForPlan, parseMention, type ChatDeps } from '../apps/server/src/chat.js';
-import type { PlanStep } from '@opencli/domain';
+import type { ConversationItem, PlanStep } from '@opencli/domain';
 import { shouldAutoApprove } from '../apps/server/src/settings.js';
 import { buildDependencyContext, type WorkflowRuntime } from '../apps/server/src/workflow.js';
 import { OpenCLIRepository } from '../packages/db/src/index.js';
@@ -205,33 +208,91 @@ describe('opencode event stream (real payloads)', () => {
   });
 });
 
-describe('cli output formatting', () => {
-  it('renders tool, thinking, file, retry and error lines', () => {
-    expect(formatActivity({ kind: 'tool', label: 'read', detail: 'src/index.ts', status: 'started' })).toBe('⏺ read(src/index.ts)\n');
-    expect(formatActivity({ kind: 'reasoning', label: 'thinking', detail: 'checking tests' })).toBe('✳ thinking checking tests\n');
-    expect(formatActivity({ kind: 'file', label: 'src/index.ts', status: 'changed' })).toBe('✎ modified src/index.ts\n');
-    expect(formatActivity({ kind: 'status', label: 'retry', detail: 'Cannot connect to API', status: 'retry' })).toBe('↻ retry: Cannot connect to API\n');
-    expect(formatActivity({ kind: 'info', label: 'error', detail: 'boom', status: 'error' })).toBe('! error boom\n');
+describe('conversation items replace CLI glyph formatting', () => {
+  /**
+   * The previous design flattened everything into one text column with glyphs
+   * (⏺ read(…), ✳ thinking, ✎ modified). The UI then had to re-parse those lines
+   * to show a tool as anything other than text. These tests assert the
+   * replacement instead: structured items, no glyphs, and prose separated out.
+   */
+  it('folds a tool call into an item with structured arguments and output', () => {
+    const factory = createEventFactory('turn-1', 'opencode');
+    const started = applyEvents([], [
+      factory.emit({
+        type: 'tool',
+        phase: 'start',
+        id: 'tool-1',
+        data: { name: 'bash', input: { command: 'npm test' }, status: 'running' },
+      }),
+    ]);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tool-1',
+      name: 'bash',
+      command: 'npm test',
+      status: 'running',
+    });
+
+    const finished = applyEvents(started, [
+      factory.emit({
+        type: 'tool',
+        phase: 'complete',
+        id: 'tool-1',
+        data: { name: 'bash', input: { command: 'npm test' }, output: '3 passed', status: 'completed' },
+      }),
+    ]);
+    expect(finished[0]).toMatchObject({ kind: 'tool', output: '3 passed', status: 'completed' });
   });
 
-  it('stays silent for busy and idle status to avoid duplicate lines', () => {
-    expect(formatActivity({ kind: 'status', label: 'busy', status: 'busy' })).toBe('');
-    expect(formatActivity({ kind: 'status', label: 'idle', status: 'idle' })).toBe('');
+  it('keeps assistant prose out of the tool items and out of the text column', () => {
+    const factory = createEventFactory('turn-1', 'opencode');
+    const items = applyEvents([], [
+      factory.emit({ type: 'tool', phase: 'start', id: 't1', data: { name: 'read', status: 'running' } }),
+      factory.emit({ type: 'message', phase: 'delta', id: 'm1', data: { text: 'Fixed the bug. ' } }),
+      factory.emit({ type: 'tool', phase: 'complete', id: 't1', data: { name: 'read', output: 'ok' } }),
+      factory.emit({ type: 'message', phase: 'delta', id: 'm1', data: { text: 'Tests pass.' } }),
+    ]);
+
+    // The message is appended in arrival order relative to the tool, not sorted
+    // away from it, so the transcript still reads in the order it happened.
+    expect(items.map((item) => item.kind)).toEqual(['tool', 'message']);
+
+    // Prose is recoverable on its own, which is what a copy or a later planning
+    // pass needs.
+    expect(conversationText(items)).toBe('Fixed the bug. Tests pass.');
   });
 
-  it('adds a line range from the first diff hunk on file activity', () => {
-    const patch = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -12,4 +12,4 @@ export const a';
-    expect(
-      formatActivity({ kind: 'file', label: 'src/a.ts', detail: patch, status: 'changed' }),
-    ).toBe('✎ modified src/a.ts (lines 12-15)\n');
-    expect(
-      formatActivity({ kind: 'file', label: 'src/b.ts', detail: '@@ -1 +1,3 @@', status: 'changed' }),
-    ).toBe('✎ modified src/b.ts (lines 1-3)\n');
-    expect(formatActivity({ kind: 'file', label: 'src/c.ts', detail: 'no hunks here', status: 'changed' })).toBe(
-      '✎ modified src/c.ts\n',
+  it('keeps reasoning out of the prose so it is never mistaken for an answer', () => {
+    const factory = createEventFactory('turn-1', 'claude');
+    const items = applyEvents([], [
+      factory.emit({ type: 'thinking', phase: 'delta', id: 'th1', data: { text: 'maybe the cache is stale' } }),
+      factory.emit({ type: 'message', phase: 'delta', id: 'm1', data: { text: 'Restart the server.' } }),
+    ]);
+    expect(items.map((item) => item.kind)).toEqual(['thinking', 'message']);
+    expect(conversationText(items)).toBe('Restart the server.');
+  });
+
+  it('marks a question pending until it is answered, and reports it as pending', () => {
+    const factory = createEventFactory('turn-1', 'opencode');
+    const asked = applyEvents([], [
+      factory.emit({
+        type: 'question',
+        phase: 'start',
+        id: 'q1',
+        data: { question: 'Which database?', requestId: 'r1', options: [{ id: 'a', label: 'SQLite' }] },
+      }),
+    ]);
+    expect(asked[0]).toMatchObject({ kind: 'question', status: 'pending', requestId: 'r1' });
+    expect(pendingRequest(asked)).toEqual({ id: 'q1', kind: 'question' });
+
+    const answered = asked.map((item) =>
+      item.kind === 'question' ? { ...item, status: 'completed' as const, answer: 'SQLite' } : item,
     );
+    expect(pendingRequest(answered)).toBeUndefined();
   });
 });
+
 
 describe('planner', () => {
   const context = {
@@ -509,6 +570,50 @@ describe('chat repository', () => {
     repo.updateChatMessage(agent.id, { status: 'complete', request: undefined });
     expect(repo.getChatMessage(agent.id)?.request).toBeUndefined();
   });
+
+  it('round-trips structured items and keeps them when the text is appended', () => {
+    const repo = makeRepo();
+    const project = repo.createProject({ name: 'Demo', path: 'C:/demo', status: 'active' });
+    const thread = repo.createChatThread({ projectId: project.id, title: 'Items' });
+    const agent = repo.createChatMessage({
+      threadId: thread.id,
+      role: 'agent',
+      agentId: 'opencode',
+      text: '',
+      status: 'streaming',
+    });
+
+    const items: ConversationItem[] = [
+      { kind: 'tool', id: 't1', status: 'completed', seq: 0, name: 'bash', command: 'npm test', output: '3 passed' },
+      { kind: 'message', id: 'm1', status: 'completed', seq: 1, text: 'All good.' },
+    ];
+    repo.saveChatMessageItems(agent.id, items);
+
+    // Items survive a reload, so a tool call is still a tool call after a
+    // restart rather than text the UI has to guess at.
+    expect(repo.getChatMessage(agent.id)?.items).toEqual(items);
+
+    // Appending to the text column must not drop them, since streaming updates
+    // and item folding interleave.
+    repo.appendChatMessageText(agent.id, 'more');
+    expect(repo.getChatMessage(agent.id)?.items).toEqual(items);
+  });
+
+  it('leaves items untouched for messages written before the column existed', () => {
+    const repo = makeRepo();
+    const project = repo.createProject({ name: 'Demo', path: 'C:/demo', status: 'active' });
+    const thread = repo.createChatThread({ projectId: project.id, title: 'Legacy' });
+    const agent = repo.createChatMessage({
+      threadId: thread.id,
+      role: 'agent',
+      agentId: 'opencode',
+      text: 'legacy reply',
+      status: 'complete',
+    });
+
+    expect(repo.getChatMessage(agent.id)?.items).toBeUndefined();
+    expect(repo.getChatMessage(agent.id)?.text).toBe('legacy reply');
+  });
 });
 describe('chat targets exactly one adapter', () => {
   function makeChatDeps(): {
@@ -722,19 +827,231 @@ describe('streamed tool arguments', () => {
     expect(chunk?.activity?.detail).toBe('{"cmd":"ls"}');
   });
 
-  it('never reports a half-received argument object', () => {
-    claude({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'read', input: {} } });
-    claude({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"filePa' } });
+  it('buffers a half-received argument object and never shows it early', () => {
+    const translator = createClaudeTranslator('turn-1', 'claude');
+    const stream = (event: Record<string, unknown>) =>
+      translator.push({ type: 'stream_event', event });
 
-    // The block closes before the JSON is complete.
-    const chunk = claude({ type: 'content_block_stop', index: 0 });
-    expect(chunk?.activity?.label).toBe('read');
-    expect(chunk?.activity?.detail).toBe('{}');
+    // The block opens with empty arguments, so only the tool identity is known.
+    const opened = stream({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', id: 'tool-1', name: 'read', input: {} },
+    });
+    expect(opened).toEqual([
+      expect.objectContaining({ type: 'tool', phase: 'start', id: 'tool-1', data: { name: 'read', status: 'running' } }),
+    ]);
+
+    // A fragment arrives; it is not valid JSON yet, so nothing is reported.
+    const fragment = stream({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'input_json_delta', partial_json: '{"filePa' },
+    });
+    expect(fragment).toEqual([]);
+
+    // The block closes on an incomplete object, so still nothing is reported.
+    expect(stream({ type: 'content_block_stop', index: 0 })).toEqual([]);
+
+    // The result completes the same tool and carries its output, which is what
+    // used to go missing because only the assistant side was read.
+    const result = translator.push({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'file body' }] },
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        type: 'tool',
+        phase: 'complete',
+        id: 'tool-1',
+        data: { name: 'read', status: 'completed', output: 'file body' },
+      }),
+    ]);
   });
 
-  it('formats the tool line with its arguments for display', () => {
-    expect(formatActivity({ kind: 'tool', label: 'read', detail: '{"filePath":"src/index.ts"}', status: 'started' })).toBe(
-      '\u23FA read({"filePath":"src/index.ts"})\n',
+  it('reports a complete argument object as an update to the same tool', () => {
+    const translator = createClaudeTranslator('turn-1', 'claude');
+    const stream = (event: Record<string, unknown>) =>
+      translator.push({ type: 'stream_event', event });
+
+    stream({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'tool_use', id: 'tool-1', name: 'bash', input: {} },
+    });
+    expect(
+      stream({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"command":"npm ' },
+      }),
+    ).toEqual([]);
+    expect(
+      stream({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: 'test"}' },
+      }),
+    ).toEqual([]);
+
+    // Once the object is whole it is reported against the tool that is already
+    // on screen, as an update rather than as a second call.
+    const reported = stream({ type: 'content_block_stop', index: 0 });
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ type: 'tool', phase: 'update', id: 'tool-1' });
+    expect(reported[0].data).toMatchObject({ name: 'bash', input: { command: 'npm test' } });
+  });
+});
+describe('opencode protocol events', () => {
+  const part = (over: Record<string, unknown>) => ({
+    type: 'message.part.updated',
+    properties: { part: { id: 'prt_1', messageID: 'msg_1', ...over } },
+  });
+
+  it('turns a cumulative text snapshot into deltas', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+
+    // OpenCode re-sends the whole part every time it changes, so the first
+    // snapshot is all new and the second is only its tail.
+    expect(translator.push(part({ type: 'text', text: 'Hello' }))).toEqual([
+      expect.objectContaining({ type: 'message', phase: 'delta', id: 'prt_1', data: { text: 'Hello' } }),
+    ]);
+    expect(translator.push(part({ type: 'text', text: 'Hello world' }))).toEqual([
+      expect.objectContaining({ type: 'message', phase: 'delta', id: 'prt_1', data: { text: ' world' } }),
+    ]);
+
+    // A repeat of the same snapshot produces nothing rather than duplicating
+    // the text, which is what would happen if snapshots were appended as-is.
+    expect(translator.push(part({ type: 'text', text: 'Hello world' }))).toEqual([]);
+  });
+
+  it('keeps a bash command resolvable and its output attached to the same tool', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push(
+        part({
+          type: 'tool',
+          tool: 'bash',
+          state: { status: 'running', input: { command: 'npm test', description: 'run tests' } },
+        }),
+      ),
     );
+    expect(items[0]).toMatchObject({ kind: 'tool', name: 'bash', command: 'npm test', status: 'running' });
+
+    const withOutput = applyEvents(
+      items,
+      translator.push(
+        part({
+          type: 'tool',
+          tool: 'bash',
+          state: {
+            status: 'running',
+            input: { command: 'npm test' },
+            output: '3 passed',
+            title: 'npm test',
+          },
+        }),
+      ),
+    );
+    // Still one tool, updated in place, with the output it streamed mid-run.
+    expect(withOutput).toHaveLength(1);
+    expect(withOutput[0]).toMatchObject({ kind: 'tool', output: '3 passed', title: 'npm test' });
+  });
+
+  it('clips a very large tool output instead of storing all of it', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push(
+        part({ type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'cat big' }, output: 'x'.repeat(60_000) } }),
+      ),
+    );
+    const tool = items[0];
+    expect(tool.kind).toBe('tool');
+    if (tool.kind !== 'tool') return;
+    expect(tool.output?.length).toBeLessThanOrEqual(20_000);
+    expect(tool.truncated).toBe(true);
+  });
+
+  it('does not let one message part leak its text into the next', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    translator.push({
+      type: 'message.part.updated',
+      properties: { part: { id: 'prt_1', type: 'text', text: 'first' } },
+    });
+    const second = translator.push({
+      type: 'message.part.updated',
+      properties: { part: { id: 'prt_2', type: 'text', text: 'second' } },
+    });
+    expect(second[0].data).toMatchObject({ text: 'second' });
+  });
+});
+
+describe('deleting a project takes its history with it', () => {
+  it('removes threads, messages, tasks and events instead of orphaning them', () => {
+    const repo = makeRepo();
+    const project = repo.createProject({ name: 'Doomed', path: 'C:/doomed', status: 'active' });
+    const thread = repo.createChatThread({ projectId: project.id, title: 'Chat' });
+    const message = repo.createChatMessage({
+      threadId: thread.id,
+      role: 'agent',
+      agentId: 'opencode',
+      text: 'hello',
+      status: 'complete',
+    });
+    const workflow = repo.createWorkflow({ projectId: project.id, name: 'Flow', status: 'draft' });
+    const task = repo.createTask({
+      projectId: project.id,
+      workflowId: workflow.id,
+      title: 'Step one',
+      status: 'pending',
+      priority: 0,
+      dependencies: [],
+      fileScopes: [],
+      retryCount: 0,
+      maxRetries: 3,
+    });
+    repo.insertEvent({
+      id: 'evt-1',
+      type: 'chat.assistant_started',
+      projectId: project.id,
+      timestamp: new Date().toISOString(),
+      payload: {},
+    });
+
+    expect(repo.deleteProject(project.id)).toBe(true);
+
+    // Foreign keys are on, so leftovers here would mean the delete silently
+    // failed partway and left the project half-removed.
+    expect(repo.getProject(project.id)).toBeUndefined();
+    expect(repo.getChatThread(thread.id)).toBeUndefined();
+    expect(repo.getChatMessage(message.id)).toBeUndefined();
+    expect(repo.getWorkflow(workflow.id)).toBeUndefined();
+    expect(repo.getTask(task.id)).toBeUndefined();
+  });
+});
+
+describe('resetting the database', () => {
+  it('clears projects and history but keeps settings', () => {
+    const repo = makeRepo();
+    const project = repo.createProject({ name: 'Gone', path: 'C:/gone', status: 'active' });
+    const thread = repo.createChatThread({ projectId: project.id, title: 'Chat' });
+    repo.createChatMessage({
+      threadId: thread.id,
+      role: 'user',
+      text: 'hi',
+      status: 'complete',
+    });
+    repo.setSetting('auth.pin', '1234');
+
+    repo.resetData();
+
+    expect(repo.listProjects()).toHaveLength(0);
+    expect(repo.listChatThreads(project.id)).toHaveLength(0);
+
+    // The PIN is not "data" in the sense a user resetting their projects means,
+    // and keeping it means they are not locked out of the app they are fixing.
+    expect(repo.getSetting('auth.pin')).toBe('1234');
   });
 });

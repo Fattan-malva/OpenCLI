@@ -33,6 +33,7 @@ import {
   stopThread,
   type ChatDeps,
 } from './chat.js';
+import { answerChatRequest } from './chatRuntime.js';
 import { sanitizeConfirmationPolicy, sanitizeInteractionMode, sanitizeSettingsPatch, DEFAULT_INTERACTION_MODE } from './settings.js';
 
 const DATA_DIR = process.env.OPENCLI_DATA ?? join(process.env.HOME ?? process.env.USERPROFILE ?? '.', '.opencli');
@@ -249,7 +250,42 @@ api.put('/settings', requireAuth, async (c) => {
   return c.json({ success: true, settings: merged });
 });
 
-// --- Filesystem browsing (for project creation) ---
+  /**
+   * Empties the local database.
+   *
+   * Two things are deliberate here. Running sessions are stopped first, because
+   * a live process would keep writing to rows that are being deleted and would
+   * then error on the next turn. And the caller has to type the word `RESET`,
+   * so this cannot happen from a stray click on a settings page.
+   *
+   * Settings survive, including the PIN: someone clearing their projects and
+   * history is not asking to be locked out of the app.
+   */
+  api.post('/settings/reset-database', requireAuth, async (c) => {
+    const body = await c.req.json<{ confirm?: string }>().catch(() => ({} as { confirm?: string }));
+    if (String(body?.confirm ?? '').trim().toUpperCase() !== 'RESET') {
+      return c.json({ error: 'Type RESET to confirm. Nothing was deleted.' }, 400);
+    }
+
+    // Every adapter process is stopped first. A live session would keep writing
+    // rows that are about to be deleted, and would then fail on its next turn.
+    try {
+      shutdownAll();
+    } catch {
+      // A session that is already gone is not a reason to abort the reset.
+    }
+
+    try {
+      db.resetData();
+    } catch (error: any) {
+      return c.json({ error: error?.message ?? 'Could not reset the database' }, 500);
+    }
+
+    eventBus.clearHistory();
+    return c.json({ success: true, projects: db.listProjects().length });
+  });
+
+  // --- Filesystem browsing (for project creation) ---
 api.get('/fs/list', requireAuth, (c) => {
   const raw = c.req.query('path')?.trim();
 
@@ -815,6 +851,52 @@ api.post('/projects/:projectId/chat/:threadId/messages', async (c) => {
     }));
   } catch (error: any) {
     return c.json({ error: error?.message ?? 'Could not send the message' }, 400);
+  }
+});
+
+/**
+ * Answers a question or permission the agent is waiting on.
+ *
+ * This is a control channel, not a message: the answer goes back to the running
+ * session and the agent continues the work it was already doing, instead of the
+ * answer becoming a new turn that the agent has to interpret as a fresh request.
+ */
+api.post('/projects/:projectId/chat/:threadId/messages/:messageId/answer', async (c) => {
+  const projectId = c.req.param('projectId');
+  const threadId = c.req.param('threadId');
+  const messageId = c.req.param('messageId');
+  const thread = db.getChatThread(threadId);
+  if (!thread || thread.projectId !== projectId) return c.json({ error: 'Chat thread not found' }, 404);
+
+  const message = db.getChatMessage(messageId);
+  if (!message || message.threadId !== threadId) return c.json({ error: 'Message not found' }, 404);
+  if (!message.request) return c.json({ error: 'This message is not waiting for an answer' }, 409);
+
+  const body = await c.req
+    .json<{ answer?: string; confirmationPolicy?: string }>()
+    .catch(() => ({} as any));
+  const answer = String(body?.answer ?? '').trim();
+  if (!answer) return c.json({ error: 'answer is required' }, 400);
+
+  const adapterId = thread.chatAdapterId;
+  if (!adapterId) return c.json({ error: 'This thread has no adapter' }, 409);
+
+  try {
+    const result = await answerChatRequest({ db, eventBus }, {
+      projectId,
+      threadId,
+      adapterId,
+      adapterName: message.meta?.agent,
+      messageId,
+      answer,
+      taskId: message.taskId ?? undefined,
+      mode: message.meta?.mode,
+      confirmationPolicy: sanitizeConfirmationPolicy(body?.confirmationPolicy),
+    });
+    if (!result.delivered) return c.json({ error: result.error ?? 'Could not deliver the answer' }, 409);
+    return c.json(result);
+  } catch (error: any) {
+    return c.json({ error: error?.message ?? 'Could not deliver the answer' }, 400);
   }
 });
 

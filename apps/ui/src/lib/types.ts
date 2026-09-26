@@ -230,7 +230,14 @@ export interface WorkflowRecord {
 }
 
 export type ChatMessageRole = 'user' | 'planner' | 'agent' | 'system';
-export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'interrupted';
+export type ChatMessageStatus =
+  | 'pending'
+  | 'streaming'
+  /** The agent stopped and is waiting for a person to answer. */
+  | 'awaiting_input'
+  | 'complete'
+  | 'error'
+  | 'interrupted';
 
 export type InteractionMode = 'ask' | 'plan' | 'agent';
 export type ConfirmationPolicy = 'default' | 'allowAll' | 'autoPilot';
@@ -260,15 +267,140 @@ export interface ChatThread {
 /** Lifecycle of the plan attached to a conversation. */
 export type PlanStatus = 'none' | 'generating' | 'ready' | 'approved' | 'executing' | 'completed';
 
+/**
+ * One thing the agent did, already translated by the server.
+ *
+ * The UI renders these directly. It does not look for glyphs, prefixes or
+ * adapter-specific line formats, because a tool call that is stored as prose
+ * cannot be collapsed, expanded or styled as a tool call.
+ */
+export type ConversationItem =
+  | ConversationTextItem
+  | ConversationToolItem
+  | ConversationSkillItem
+  | ConversationTodoItem
+  | ConversationFileChangeItem
+  | ConversationQuestionItem
+  | ConversationPermissionItem
+  | ConversationStatusItem
+  | ConversationErrorItem;
+
+export type ConversationItemStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface ConversationTextItem {
+  id: string;
+  kind: 'message' | 'thinking';
+  status: ConversationItemStatus;
+  seq: number;
+  text: string;
+}
+
+export interface ConversationToolItem {
+  id: string;
+  kind: 'tool';
+  status: ConversationItemStatus;
+  seq: number;
+  name: string;
+  input?: unknown;
+  /** Resolved on the server for shell tools, so the UI does not re-derive it. */
+  command?: string;
+  output?: string;
+  error?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  truncated?: boolean;
+}
+
+export interface ConversationSkillItem {
+  id: string;
+  kind: 'skill';
+  status: ConversationItemStatus;
+  seq: number;
+  name: string;
+  skillId?: string;
+  detail?: string;
+}
+
+export interface ConversationTodoEntry {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  priority?: string;
+}
+
+export interface ConversationTodoItem {
+  id: string;
+  kind: 'todo';
+  status: ConversationItemStatus;
+  seq: number;
+  items: ConversationTodoEntry[];
+}
+
+export interface ConversationFileChangeItem {
+  id: string;
+  kind: 'file_change';
+  status: ConversationItemStatus;
+  seq: number;
+  path: string;
+  action: 'created' | 'modified' | 'deleted';
+  additions?: number;
+  deletions?: number;
+  patch?: string;
+}
+
+export interface ConversationQuestionItem {
+  id: string;
+  kind: 'question';
+  status: ConversationItemStatus;
+  seq: number;
+  requestId: string;
+  question: string;
+  options: { id: string; label: string; description?: string }[];
+  multiple?: boolean;
+  answer?: string;
+}
+
+export interface ConversationPermissionItem {
+  id: string;
+  kind: 'permission';
+  status: ConversationItemStatus;
+  seq: number;
+  requestId: string;
+  tool?: string;
+  command?: string;
+  detail?: string;
+  answer?: string;
+}
+
+export interface ConversationStatusItem {
+  id: string;
+  kind: 'status';
+  status: ConversationItemStatus;
+  seq: number;
+  label: string;
+  detail?: string;
+}
+
+export interface ConversationErrorItem {
+  id: string;
+  kind: 'error';
+  status: ConversationItemStatus;
+  seq: number;
+  message: string;
+}
+
 export interface ChatMessage {
   id: string;
   threadId: string;
   role: ChatMessageRole;
   agentId?: string;
   taskId?: string;
+  /** The agent's prose only; tool calls and reasoning live in `items`. */
   text: string;
   status: ChatMessageStatus;
   meta?: ChatMessageMeta;
+  /** Everything the agent did this turn, in the order it happened. */
+  items?: ConversationItem[];
   request?: AdapterRequest;
   createdAt: string;
   updatedAt: string;

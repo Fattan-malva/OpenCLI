@@ -3,6 +3,7 @@ import { TaskList } from '../components/TaskCard';
 import { ChatThread } from '../components/ChatThread';
 import { ChatComposer } from '../components/ChatComposer';
 import { ChatThreadList } from '../components/ChatThreadList';
+import { AdapterIcon } from '../components/AdapterIcon';
 import { Icon } from '../lib/icons';
 import { STATUS, useStore } from '../store';
 import { adapterMeta } from '../lib/data';
@@ -282,7 +283,7 @@ function LivePanel({ adapterId, tasks }: { adapterId: string; tasks: ReturnType<
   return (
     <div className="rounded-lg border border-app-border bg-app-surface/70 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-app-border">
-        <Icon name={meta.icon} className={`w-3.5 h-3.5 ${meta.color}`} />
+        <AdapterIcon id={adapterId} className="w-3.5 h-3.5 shrink-0" />
         <span className={`text-xs font-semibold ${meta.color}`}>{meta.name}</span>
         <span className="text-[10px] font-mono text-app-text">{adapterId}</span>
         <div className="ml-auto flex items-center gap-1">

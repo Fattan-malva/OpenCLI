@@ -62,6 +62,15 @@ import {
   Square,
   PlayCircle,
   Ban,
+  ChevronDown,
+  ChevronUp,
+  Wrench,
+  Brain,
+  Sparkles,
+  FileCode,
+  ListTodo,
+  CircleSlash,
+  Maximize2,
 } from 'lucide-react';
 
 const ICONS: Record<string, LucideIcon> = {
@@ -127,6 +136,15 @@ const ICONS: Record<string, LucideIcon> = {
   square: Square,
   'play-circle': PlayCircle,
   ban: Ban,
+  'chevron-down': ChevronDown,
+  'chevron-up': ChevronUp,
+  wrench: Wrench,
+  brain: Brain,
+  sparkles: Sparkles,
+  'file-code': FileCode,
+  'list-todo': ListTodo,
+  'circle-slash': CircleSlash,
+  'maximize-2': Maximize2,
 };
 
 export function Icon({

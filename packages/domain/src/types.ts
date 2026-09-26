@@ -191,6 +191,7 @@ export type EventType =
   | 'chat.assistant_completed'
   | 'chat.assistant_failed'
   | 'chat.turn_interrupted'
+  | 'chat.turn_item'
   | 'installation.started'
   | 'installation.completed'
   | 'installation.failed';
@@ -274,7 +275,190 @@ export interface ChatExecution {
 
 export type ChatMessageRole = 'user' | 'planner' | 'agent' | 'system';
 
-export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'interrupted';
+/**
+ * Where a message is in its lifecycle.
+ *
+ * `awaiting_input` is distinct from `streaming`: the agent stopped and is
+ * waiting for a person, so the reply box belongs to a question or a permission
+ * rather than to a new message.
+ */
+export type ChatMessageStatus =
+  | 'pending'
+  | 'streaming'
+  | 'awaiting_input'
+  | 'complete'
+  | 'error'
+  | 'interrupted';
+
+/**
+ * What one thing the agent did looks like in the conversation.
+ *
+ * These are the only shapes the chat UI renders. An adapter's own output is
+ * translated into them by the protocol layer, so the UI never has to recognise
+ * a line, a glyph or a CLI's private format.
+ */
+export type ConversationItemKind =
+  | 'message'
+  | 'thinking'
+  | 'tool'
+  | 'skill'
+  | 'todo'
+  | 'file_change'
+  | 'question'
+  | 'permission'
+  | 'status'
+  | 'error';
+
+export type ConversationItemStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface ConversationTextItem {
+  id: string;
+  kind: 'message' | 'thinking';
+  status: ConversationItemStatus;
+  seq: number;
+  text: string;
+}
+
+/**
+ * What an adapter reported about one tool call.
+ *
+ * `status` is the adapter's own state string, kept verbatim so the conversation
+ * can show what the CLI said instead of inferring completion.
+ */
+export interface ConversationToolData {
+  name: string;
+  status?: string;
+  input?: unknown;
+  /** Tool stdout / result. Present for anything that produced output. */
+  output?: string;
+  error?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConversationToolItem {
+  id: string;
+  kind: 'tool';
+  status: ConversationItemStatus;
+  seq: number;
+  name: string;
+  /** Real arguments, kept structured rather than stringified into a label. */
+  input?: unknown;
+  /** Pre-resolved for shell tools so the UI does not re-derive it per render. */
+  command?: string;
+  /** Tool stdout / result. Present for anything that produced output. */
+  output?: string;
+  error?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  /** True when `output` was clipped to the stored limit. */
+  truncated?: boolean;
+}
+
+export interface ConversationSkillItem {
+  id: string;
+  kind: 'skill';
+  status: ConversationItemStatus;
+  seq: number;
+  name: string;
+  skillId?: string;
+  detail?: string;
+}
+
+export interface ConversationTodoEntry {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  priority?: string;
+}
+
+export interface ConversationTodoItem {
+  id: string;
+  kind: 'todo';
+  status: ConversationItemStatus;
+  seq: number;
+  items: ConversationTodoEntry[];
+}
+
+export interface ConversationFileChangeItem {
+  id: string;
+  kind: 'file_change';
+  status: ConversationItemStatus;
+  seq: number;
+  path: string;
+  action: 'created' | 'modified' | 'deleted';
+  additions?: number;
+  deletions?: number;
+  patch?: string;
+}
+
+export interface ConversationQuestionItem {
+  id: string;
+  kind: 'question';
+  status: ConversationItemStatus;
+  seq: number;
+  requestId: string;
+  question: string;
+  /** Empty when the agent asked freely; the UI then offers a text answer. */
+  options: { id: string; label: string; description?: string }[];
+  multiple?: boolean;
+  /** What the person answered, kept so the transcript shows the resolution. */
+  answer?: string;
+}
+
+export interface ConversationPermissionItem {
+  id: string;
+  kind: 'permission';
+  status: ConversationItemStatus;
+  seq: number;
+  requestId: string;
+  tool?: string;
+  command?: string;
+  detail?: string;
+  /** Whether it was allowed or refused, once resolved. */
+  answer?: string;
+}
+
+export interface ConversationStatusItem {
+  id: string;
+  kind: 'status';
+  status: ConversationItemStatus;
+  seq: number;
+  label: string;
+  detail?: string;
+}
+
+export interface ConversationErrorItem {
+  id: string;
+  kind: 'error';
+  status: ConversationItemStatus;
+  seq: number;
+  message: string;
+}
+
+export type ConversationItem =
+  | ConversationTextItem
+  | ConversationToolItem
+  | ConversationSkillItem
+  | ConversationTodoItem
+  | ConversationFileChangeItem
+  | ConversationQuestionItem
+  | ConversationPermissionItem
+  | ConversationStatusItem
+  | ConversationErrorItem;
+
+/** A choice the agent offered, so the UI renders buttons rather than prose. */
+export interface AgentOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
 
 export interface ChatMessageMeta {
   agent?: string;
@@ -291,10 +475,22 @@ export interface ChatMessage {
   agentId?: string;
   /** Workflow task this message belongs to (agent replies). */
   taskId?: string;
+  /**
+   * The assistant's prose only.
+   *
+   * Tool calls, reasoning and status are not part of this: they live in `items`
+   * so a reader of the text gets the answer, not a transcript of the work.
+   */
   text: string;
   status: ChatMessageStatus;
   meta?: ChatMessageMeta;
-  /** Permission/question the adapter is waiting on; shown instead of the reply box. */
+  /** Structured turn content, already folded from protocol events. */
+  items?: ConversationItem[];
+  /**
+   * Permission/question the adapter is waiting on; shown instead of the reply
+   * box. Kept alongside `items` so a pending request survives a reload even if
+   * the item list is trimmed.
+   */
   request?: ChatRequest;
   createdAt: string;
   updatedAt: string;
@@ -306,6 +502,8 @@ export interface ChatRequest {
   message: string;
   command?: string;
   options?: string[];
+  /** Correlates the answer with the control request that is waiting. */
+  requestId?: string;
 }
 
 /** Plan step produced by the planner agent. */

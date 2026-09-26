@@ -158,9 +158,72 @@ export class OpenCLIRepository {
     return updated;
   }
 
+  /**
+   * Removes a project and everything that belongs to it.
+   *
+   * Only `chat_messages` cascades on its own, so the rest is deleted explicitly
+   * and in one transaction. Doing it in the wrong order, or leaving any of it
+   * behind, either trips the foreign key check or leaves rows pointing at a
+   * project that no longer exists — which then reappear as phantom data the next
+   * time the same path is added.
+   */
   deleteProject(id: string): boolean {
-    const result = this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-    return result.changes > 0;
+    const run = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM chat_messages WHERE thread_id IN (SELECT id FROM chat_threads WHERE project_id = ?)').run(id);
+      this.db.prepare('DELETE FROM chat_threads WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)').run(id);
+      this.db.prepare('DELETE FROM task_dependencies WHERE depends_on_task_id IN (SELECT id FROM tasks WHERE project_id = ?)').run(id);
+      this.db.prepare('DELETE FROM task_file_scopes WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)').run(id);
+      this.db.prepare('DELETE FROM tasks WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM workflows WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM workspaces WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM model_routings WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM locks WHERE project_id = ?').run(id);
+      this.db.prepare('DELETE FROM events WHERE project_id = ?').run(id);
+      return this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    return run().changes > 0;
+  }
+
+  /**
+   * Empties the database without touching the schema.
+   *
+   * `settings` is kept, because it holds the app's own configuration — the PIN,
+   * which adapters are switched on, model routing defaults. A user asking to
+   * clear their data means their projects and history, not being locked out of
+   * the app they are trying to fix.
+   *
+   * Foreign keys stay off for the duration: the rows form a web of references,
+   * and clearing every table is exactly the case where the ordering rules that
+   * protect a normal delete are in the way rather than helping.
+   */
+  resetData(): void {
+    const tables = [
+      'chat_messages',
+      'chat_threads',
+      'task_dependencies',
+      'task_file_scopes',
+      'tasks',
+      'workflows',
+      'workspaces',
+      'model_routings',
+      'locks',
+      'events',
+      'sessions',
+      'projects',
+      'agents',
+      'models',
+      'providers',
+    ];
+    const run = this.db.transaction(() => {
+      this.db.pragma('foreign_keys = OFF');
+      try {
+        for (const table of tables) this.db.prepare(`DELETE FROM ${table}`).run();
+      } finally {
+        this.db.pragma('foreign_keys = ON');
+      }
+    });
+    run();
   }
 
   // === Tasks ===
@@ -656,8 +719,8 @@ export class OpenCLIRepository {
     const row: ChatMessage = { ...message, id: randomUUID(), createdAt: now, updatedAt: now };
     this.db
       .prepare(
-        `INSERT INTO chat_messages (id, thread_id, role, agent_id, task_id, text, status, request_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO chat_messages (id, thread_id, role, agent_id, task_id, text, status, request_json, items_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -668,6 +731,7 @@ export class OpenCLIRepository {
         row.text,
         row.status,
         row.request ? JSON.stringify(row.request) : null,
+        row.items ? JSON.stringify(row.items) : null,
         row.createdAt,
         row.updatedAt,
       );
@@ -701,13 +765,30 @@ export class OpenCLIRepository {
     return this.getChatMessage(id);
   }
 
+  /**
+   * Replaces the structured turn content.
+   *
+   * Called on a debounce rather than per event, so a long stream does not turn
+   * into a write per token. `text` is untouched here: the two are separate
+   * views of the same turn, and mixing them would put tool calls back into the
+   * prose.
+   */
+  saveChatMessageItems(id: string, items: ChatMessage['items']): ChatMessage | undefined {
+    const existing = this.getChatMessage(id);
+    if (!existing) return undefined;
+    this.db
+      .prepare('UPDATE chat_messages SET items_json=?, updated_at=? WHERE id=?')
+      .run(items ? JSON.stringify(items) : null, new Date().toISOString(), id);
+    return this.getChatMessage(id);
+  }
+
   updateChatMessage(id: string, updates: Partial<ChatMessage>): ChatMessage | undefined {
     const existing = this.getChatMessage(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
     this.db
       .prepare(
-        'UPDATE chat_messages SET role=?, agent_id=?, task_id=?, text=?, status=?, request_json=?, updated_at=? WHERE id=?',
+        'UPDATE chat_messages SET role=?, agent_id=?, task_id=?, text=?, status=?, request_json=?, items_json=?, updated_at=? WHERE id=?',
       )
       .run(
         updated.role,
@@ -716,6 +797,7 @@ export class OpenCLIRepository {
         updated.text,
         updated.status,
         updated.request ? JSON.stringify(updated.request) : null,
+        updated.items ? JSON.stringify(updated.items) : null,
         updated.updatedAt,
         id,
       );
@@ -903,6 +985,7 @@ export class OpenCLIRepository {
       text: row.text ?? '',
       status: row.status as ChatMessageStatus,
       meta: row.meta_json ? (JSON.parse(row.meta_json) as ChatMessage['meta']) : undefined,
+      items: row.items_json ? (JSON.parse(row.items_json) as ChatMessage['items']) : undefined,
       request: row.request_json ? (JSON.parse(row.request_json) as ChatRequest) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

@@ -1,18 +1,19 @@
-// Adapter session manager: runs CLI commands in the open project folder,
-// the same way you would type `opencode`, `kilo`, or `claude` in a terminal.
+// Layer 1 of the chat pipeline: the adapter runtime.
+//
+// A CLI runs here for as long as its adapter is active, and every turn reuses
+// that one process and one runtime session. Nothing in this file formats output
+// for display: adapter output is translated into protocol events (see
+// ./protocol) and handed to the turn, and the conversation decides what a user
+// sees. Raw CLI bytes are the Terminal tab's business, not this file's.
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { adapterCommand } from '@opencli/discovery';
 import type { ChatRequest } from '@opencli/domain';
-import {
-  createLineBuffer,
-  extractResponseText,
-  parseOpencodeEvent,
-  parseSessionLine,
-  type ProtocolActivity,
-  type OpencodeSignal,
-} from './sessionProtocol.js';
+import { createLineBuffer, extractResponseText } from './sessionProtocol.js';
+import { createClaudeTranslator, type ClaudeTranslator } from './protocol/claudeEvents.js';
+import { createOpencodeTranslator, type OpencodeTranslator } from './protocol/opencodeEvents.js';
+import type { AgentEvent } from './protocol/agentEvent.js';
 
 export interface SessionState {
   projectId: string;
@@ -32,10 +33,8 @@ export interface SessionState {
 }
 
 export interface TurnHandlers {
-  onText?: (text: string) => void;
-  onTool?: (tool: string) => void;
+  onEvent?: (event: AgentEvent) => void;
   onRequest?: (request: ChatRequest) => void;
-  onActivity?: (activity: ProtocolActivity) => void;
   onMeta?: (meta: { agent?: string; mode?: string; provider?: string; model?: string }) => void;
 }
 
@@ -47,16 +46,26 @@ export interface TurnResult {
   meta?: { agent?: string; mode?: string; provider?: string; model?: string };
 }
 
+type Translator = ClaudeTranslator | OpencodeTranslator;
+
 interface ActiveTurn {
   handlers: TurnHandlers;
   text: string;
   settled: boolean;
   settle: (result: TurnResult) => void;
   resetIdle?: () => void;
+  /** The adapter's own assistant-message ids, to ignore other sessions' parts. */
   assistantIds: Set<string>;
-  partText: Map<string, string>;
-  emittedParts: Set<string>;
+  translator: Translator;
+  /** Meta reported by the adapter for this turn, kept for the message badge. */
   meta: { agent?: string; mode?: string; provider?: string; model?: string };
+  /**
+   * A control request is outstanding, so the turn is waiting on the user and
+   * must not be treated as stalled.
+   */
+  awaitingUser: boolean;
+  /** True once a turn/complete event has been seen. */
+  closing: boolean;
 }
 
 interface SessionEntry extends SessionState {
@@ -67,7 +76,17 @@ interface SessionEntry extends SessionState {
   eventStream?: AbortController;
   eventStreamReady?: Promise<boolean>;
   eventStreamConnected: boolean;
+  /**
+   * Agents the running server reported, cached for the life of the process.
+   *
+   * Discovering them spawns requests to the adapter, and doing that on every
+   * chat message is what made the first token arrive late.
+   */
+  agentModes?: { at: number; modes: Array<{ id: string; name: string }> };
 }
+
+/** How long a discovered agent list stays fresh. */
+const AGENT_MODES_TTL_MS = 60_000;
 
 const SESSIONS = new Map<string, SessionEntry>();
 
@@ -84,206 +103,76 @@ function createEntry(state: SessionState): SessionEntry {
   };
 }
 
-function turnActivity(entry: SessionEntry, activity: ProtocolActivity): void {
-  entry.turn?.handlers.onActivity?.(activity);
+function createTranslator(entry: SessionEntry, turnId: string): Translator {
+  return entry.adapterId === 'claude'
+    ? createClaudeTranslator(turnId, entry.adapterId)
+    : createOpencodeTranslator(turnId, entry.adapterId);
 }
 
-function emitSignal(entry: SessionEntry, signal: OpencodeSignal): void {
+/**
+ * Applies one translated event to the turn.
+ *
+ * Terminal phases settle the turn; a control request parks it, because the
+ * adapter is waiting for a person and an idle timeout would kill a turn that is
+ * behaving correctly.
+ */
+function emitEvent(entry: SessionEntry, event: AgentEvent): void {
   const turn = entry.turn;
   if (!turn || turn.settled) return;
 
-  if (signal.type === 'assistant-message') {
-    turn.assistantIds.add(signal.messageId);
+  turn.handlers.onEvent?.(event);
+
+  if (event.type === 'turn' && event.phase === 'start') {
     const meta = {
-      agent: signal.agent ?? turn.meta.agent,
-      mode: signal.mode ?? turn.meta.mode,
-      provider: signal.provider ?? turn.meta.provider,
-      model: signal.model ?? turn.meta.model,
+      agent: event.data.agent ?? turn.meta.agent,
+      mode: event.data.mode ?? turn.meta.mode,
+      provider: event.data.provider ?? turn.meta.provider,
+      model: event.data.model ?? turn.meta.model,
     };
-    const changed = Object.entries(meta).some(([key, value]) => value && value !== turn.meta[key as keyof typeof turn.meta]);
-    if (changed) {
+    if (Object.entries(meta).some(([field, value]) => value && value !== turn.meta[field as keyof typeof turn.meta])) {
       turn.meta = meta;
       turn.handlers.onMeta?.(meta);
     }
-    if (signal.error) {
-      turnActivity(entry, { kind: 'info', label: 'model error', detail: signal.error, status: 'error' });
-      settleTurn(entry, { ok: false, text: turn.text, error: signal.error, meta: turn.meta });
-      return;
-    }
-    if (signal.completed) {
-      turnActivity(entry, { kind: 'status', label: 'turn finished', status: 'ok' });
-      settleTurn(entry, { ok: true, text: turn.text, meta: turn.meta });
-    }
     return;
   }
 
-  if (signal.type === 'part') {
-    if (signal.messageId !== 'session' && !turn.assistantIds.has(signal.messageId)) return;
+  if (event.type === 'message' && event.phase === 'delta') {
+    turn.text += event.data.text;
+  }
 
-    if (signal.kind === 'text') {
-      if (signal.incremental) {
-        if (signal.text) pushTurnText(entry, signal.text);
-        return;
-      }
-      const next = signal.text ?? '';
-      const previous = turn.partText.get(signal.partId) ?? '';
-      if (!next || next === previous) return;
-      const delta = next.startsWith(previous) ? next.slice(previous.length) : next;
-      turn.partText.set(signal.partId, next);
-      if (delta) pushTurnText(entry, delta);
-      return;
-    }
-
-    if (signal.kind === 'step') {
-      const marker = `step:${signal.partId}:${signal.label}`;
-      if (turn.emittedParts.has(marker)) return;
-      turn.emittedParts.add(marker);
-      turnActivity(entry, { kind: 'status', label: signal.label ?? 'step', status: signal.status });
-      return;
-    }
-
-    if (signal.kind === 'reasoning') {
-      if (turn.emittedParts.has(signal.partId)) return;
-      turn.emittedParts.add(signal.partId);
-      turnActivity(entry, { kind: 'reasoning', label: 'thinking', detail: signal.text });
-      return;
-    }
-
-    if (signal.kind === 'tool') {
-      const first = !turn.emittedParts.has(signal.partId);
-      if (first) turn.emittedParts.add(signal.partId);
-      turnActivity(entry, {
-        kind: 'tool',
-        label: signal.label ?? 'tool',
-        detail: first ? signal.detail : undefined,
-        status: signal.status,
+  if (event.type === 'question' || event.type === 'permission') {
+    if (event.phase === 'start') {
+      turn.awaitingUser = true;
+      turn.handlers.onRequest?.({
+        type: event.type,
+        message: event.type === 'question' ? event.data.question : (event.data.detail ?? `Allow ${event.data.tool ?? 'the tool'} to run?`),
+        command: event.type === 'permission' ? event.data.command : undefined,
+        options: event.type === 'question' ? event.data.options.map((option) => option.label) : undefined,
+        requestId: event.data.requestId,
       });
+      // A parked turn is not idle: the person answering it is the activity.
+      turn.resetIdle?.();
       return;
     }
+    turn.awaitingUser = false;
+    turn.resetIdle?.();
+    return;
+  }
 
-    if (signal.kind === 'file') {
-      const marker = `file:${signal.partId}:${signal.status ?? 'changed'}`;
-      if (turn.emittedParts.has(marker)) return;
-      turn.emittedParts.add(marker);
-      turnActivity(entry, { kind: 'file', label: signal.label ?? 'file', detail: signal.detail, status: signal.status });
+  turn.resetIdle?.();
+
+  if (event.type === 'turn' && event.phase === 'complete') {
+    const reason = event.data.reason;
+    if (reason === 'error') {
+      settleTurn(entry, { ok: false, text: turn.text, error: event.data.error ?? 'The agent reported an error', meta: turn.meta });
+      return;
     }
-    return;
-  }
-
-  if (signal.type === 'status') {
-    turnActivity(entry, { kind: 'status', label: signal.value, detail: signal.detail, status: signal.value });
-    return;
-  }
-
-  if (signal.type === 'error') {
-    turnActivity(entry, { kind: 'info', label: 'error', detail: signal.message, status: 'error' });
-    settleTurn(entry, { ok: false, text: turn.text, error: signal.message, meta: turn.meta });
-    return;
-  }
-
-  if (signal.type === 'request') {
-    turn.handlers.onRequest?.(signal.request);
-    return;
-  }
-
-  if (signal.type === 'idle') {
+    if (reason === 'aborted') {
+      settleTurn(entry, { ok: false, text: turn.text, error: event.data.error ?? 'Turn aborted', timedOut: true, meta: turn.meta });
+      return;
+    }
     settleTurn(entry, { ok: true, text: turn.text, meta: turn.meta });
   }
-}
-
-function handleEventChunk(entry: SessionEntry, chunk: string): void {
-  for (const line of chunk.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) continue;
-    const raw = trimmed.slice(5).trim();
-    if (!raw || raw === '[DONE]') continue;
-
-    let payload: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      payload = parsed as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-
-    const properties = (payload.properties ?? {}) as Record<string, unknown>;
-    if (entry.sessionId && properties.sessionID && properties.sessionID !== entry.sessionId) continue;
-
-    for (const signal of parseOpencodeEvent(payload)) emitSignal(entry, signal);
-  }
-}
-
-function ensureEventStream(entry: SessionEntry): Promise<boolean> {
-  if (!entry.serverUrl) return Promise.resolve(false);
-  if (entry.eventStreamReady) return entry.eventStreamReady;
-
-  const controller = new AbortController();
-  entry.eventStream = controller;
-  entry.eventStreamConnected = false;
-
-  const ready = (async () => {
-    try {
-      const response = await fetch(`${entry.serverUrl}/event`, {
-        headers: { accept: 'text/event-stream' },
-        signal: controller.signal,
-      });
-      if (!response.ok || !response.body) return false;
-      entry.eventStreamConnected = true;
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split(/\n\n/);
-        buffer = blocks.pop() ?? '';
-        for (const block of blocks) handleEventChunk(entry, block);
-      }
-      entry.eventStreamConnected = false;
-      return true;
-    } catch {
-      entry.eventStreamConnected = false;
-      return false;
-    }
-  })();
-
-  entry.eventStreamReady = ready;
-  return ready;
-}
-
-function deliver(entry: SessionEntry, text: string): void {
-  const turn = entry.turn;
-  if (!turn || turn.settled) return;
-  for (const line of entry.lineBuffer.push(text)) {
-    const chunk = parseSessionLine(line, entry.adapterId);
-    if (!chunk) continue;
-    if (chunk.text) {
-      turn.text += chunk.text;
-      turn.handlers.onText?.(chunk.text);
-    }
-    if (chunk.tool) turn.handlers.onTool?.(chunk.tool);
-    if (chunk.activity) turn.handlers.onActivity?.(chunk.activity);
-    if (chunk.request) turn.handlers.onRequest?.(chunk.request);
-    if (chunk.text || chunk.tool || chunk.request || chunk.activity) turn.resetIdle?.();
-    if (chunk.error) {
-      settleTurn(entry, { ok: false, text: turn.text, error: chunk.error });
-      return;
-    }
-    if (chunk.done) {
-      settleTurn(entry, { ok: true, text: turn.text });
-      return;
-    }
-  }
-}
-
-function pushTurnText(entry: SessionEntry, text: string): void {
-  const turn = entry.turn;
-  if (!turn || turn.settled || !text) return;
-  turn.text += text;
-  turn.handlers.onText?.(text);
-  turn.resetIdle?.();
 }
 
 function settleTurn(entry: SessionEntry, result: TurnResult): void {
@@ -331,6 +220,173 @@ function waitForTurn(entry: SessionEntry, timeoutMs: number, idleMs: number): Pr
   });
 }
 
+/**
+ * Reads one SSE block and feeds any event payloads to the turn.
+ *
+ * Events belonging to another runtime session are dropped here rather than
+ * downstream: a server can host several sessions and only one of them is this
+ * conversation's agent.
+ */
+function handleEventChunk(entry: SessionEntry, chunk: string): void {
+  for (const line of chunk.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const raw = trimmed.slice(5).trim();
+    if (!raw || raw === '[DONE]') continue;
+
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const properties = (payload.properties ?? {}) as Record<string, unknown>;
+    if (entry.sessionId && properties.sessionID && properties.sessionID !== entry.sessionId) continue;
+
+    for (const event of translate(entry, payload)) emitEvent(entry, event);
+  }
+}
+
+function translate(entry: SessionEntry, payload: Record<string, unknown>): AgentEvent[] {
+  const turn = entry.turn;
+  if (!turn || turn.settled) return [];
+  return turn.translator.push(payload);
+}
+
+function ensureEventStream(entry: SessionEntry): Promise<boolean> {
+  if (!entry.serverUrl) return Promise.resolve(false);
+  if (entry.eventStreamReady) return entry.eventStreamReady;
+
+  const controller = new AbortController();
+  entry.eventStream = controller;
+  entry.eventStreamConnected = false;
+
+  const ready = (async () => {
+    try {
+      const response = await fetch(`${entry.serverUrl}/event`, {
+        headers: { accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) return false;
+      entry.eventStreamConnected = true;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split(/\n\n/);
+        buffer = blocks.pop() ?? '';
+        for (const block of blocks) handleEventChunk(entry, block);
+      }
+      entry.eventStreamConnected = false;
+      return true;
+    } catch {
+      entry.eventStreamConnected = false;
+      return false;
+    }
+  })();
+
+  entry.eventStreamReady = ready;
+  return ready;
+}
+
+/**
+ * Feeds a process's own stdout to the turn.
+ *
+ * Only JSONL records are read, and only by the adapter whose protocol defines
+ * them. A serve adapter's stdout is its own logging — "listening on port…",
+ * "session created" — and treating that as assistant text is what used to put
+ * boot noise into the transcript. Raw bytes belong to the Terminal tab.
+ *
+ * stderr is not conversation content either, so it is logged and dropped.
+ */
+function deliverStdout(entry: SessionEntry, text: string): void {
+  if (entry.adapterId !== 'claude') return;
+  const turn = entry.turn;
+  if (!turn || turn.settled) return;
+  for (const line of entry.lineBuffer.push(text)) {
+    const record = parseJsonRecord(line);
+    if (!record) continue;
+    for (const event of turn.translator.push(record)) emitEvent(entry, event);
+    if (!entry.turn || entry.turn.settled) return;
+  }
+}
+
+function parseJsonRecord(line: string): Record<string, unknown> | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Feeds an HTTP response body to the turn.
+ *
+ * A prompt endpoint may answer with an event stream, newline-delimited events,
+ * or a single JSON document. Only the first two are protocol; a plain JSON
+ * document is a non-streaming answer, so its text is taken as the reply.
+ */
+function deliverResponse(entry: SessionEntry, text: string, mode: 'events' | 'text'): void {
+  const turn = entry.turn;
+  if (!turn || turn.settled) return;
+
+  if (mode === 'text') {
+    const record = parseJsonRecord(text.trim());
+    if (record) {
+      for (const event of turn.translator.push(record)) emitEvent(entry, event);
+      return;
+    }
+    pushTurnText(entry, text);
+    return;
+  }
+
+  for (const raw of splitEventLines(text)) {
+    const record = parseJsonRecord(raw);
+    if (!record) continue;
+    for (const event of turn.translator.push(record)) emitEvent(entry, event);
+    if (!entry.turn || entry.turn.settled) return;
+  }
+}
+
+function splitEventLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== 'data: [DONE]' && line !== '[DONE]')
+    .map((line) => (line.startsWith('data:') ? line.slice(5).trim() : line));
+}
+
+/**
+ * Appends plain text to the current turn.
+ *
+ * The text is delivered as an ordinary message event rather than side-channel,
+ * so there is exactly one path by which anything reaches the conversation.
+ */
+function pushTurnText(entry: SessionEntry, text: string): void {
+  const turn = entry.turn;
+  if (!turn || turn.settled || !text) return;
+  emitEvent(entry, {
+    type: 'message',
+    phase: 'delta',
+    id: 'text:response',
+    seq: 0,
+    turnId: '',
+    adapterId: entry.adapterId,
+    timestamp: Date.now(),
+    data: { text },
+  });
+}
+
 interface PromptTarget {
   path: string;
   body: (text: string, overrides: PromptOverrides) => Record<string, unknown>;
@@ -370,20 +426,36 @@ function promptTargets(sessionId: string): PromptTarget[] {
   ];
 }
 
+/**
+ * Pumps a prompt response body into the turn.
+ *
+ * The event stream that carries the turn is already open, so this body is only
+ * read for the case where the endpoint answers inline. It still runs through
+ * the translator, because a non-streaming endpoint replies with the same
+ * protocol events, just all at once.
+ */
 async function pumpResponseStream(entry: SessionEntry, response: Response): Promise<void> {
   const body = response.body;
   if (!body) return;
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  let pending = '';
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
-      deliver(entry, decoder.decode(value, { stream: true }));
-      if (entry.turn?.settled) {
-        await reader.cancel().catch(() => undefined);
-        return;
+      pending += decoder.decode(value, { stream: true });
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        const record = parseJsonRecord(line);
+        if (!record) continue;
+        for (const event of translate(entry, record)) emitEvent(entry, event);
+        if (!entry.turn || entry.turn.settled) {
+          await reader.cancel().catch(() => undefined);
+          return;
+        }
       }
     }
   } catch {
@@ -446,25 +518,60 @@ async function sendRemoteMessage(
 }
 
 /**
- * Answers a permission/question/choice request while the turn is in flight,
- * WITHOUT creating a new turn. The response streams into the existing turn
- * (opencode) or is written straight to the CLI stdin (claude / stdin adapters),
- * so the pending request resolves and the same turn settles on idle.
+ * Answers a pending control request on the turn that is already running.
+ *
+ * This is the difference between a control channel and a chat message. The
+ * agent asked a question and stopped; its answer is delivered into the *same*
+ * turn, which then continues and settles on its own completion event. Creating a
+ * new turn instead makes the answer look like a fresh request to the agent, and
+ * leaves the original turn parked forever.
+ *
+ * The text is the adapter's own answer vocabulary, so an adapter that expects a
+ * specific token gets it; nothing is invented per request here.
  */
-export async function sendAnswerToRequest(projectId: string, adapterId: string, answer: string): Promise<boolean> {
+export async function sendAnswerToRequest(
+  projectId: string,
+  adapterId: string,
+  answer: string,
+): Promise<boolean> {
   const entry = SESSIONS.get(key(projectId, adapterId));
   if (!entry || !alive(entry)) return false;
+
+  const turn = entry.turn;
+  if (!turn || turn.settled) {
+    // The turn already finished, so there is nothing left to answer. Saying so
+    // is better than delivering text to a session that will treat it as a new
+    // prompt.
+    return false;
+  }
+
+  // Answering releases the turn, so its idle timer must not race the answer.
+  turn.awaitingUser = false;
+  turn.resetIdle?.();
 
   if (SERVE_ADAPTERS.has(adapterId) && entry.serverUrl && entry.sessionId) {
     const delivery = await sendRemoteMessage(entry, answer, {
       mode: entry.activeMode,
-      model: entry.activeProvider && entry.activeModel
-        ? { provider: entry.activeProvider, model: entry.activeModel }
-        : undefined,
+      model:
+        entry.activeProvider && entry.activeModel
+          ? { provider: entry.activeProvider, model: entry.activeModel }
+          : undefined,
     });
     if (delivery !== 'failed') return true;
   }
   return writeStdinMessage(entry, answer);
+}
+
+/** True when a turn is parked on a person rather than working. */
+export function isSessionAwaitingUser(projectId: string, adapterId: string): boolean {
+  const entry = SESSIONS.get(key(projectId, adapterId));
+  return Boolean(entry?.turn && !entry.turn.settled && entry.turn.awaitingUser);
+}
+
+/** True when a turn is running, whether it is working or waiting on a person. */
+export function isSessionBusy(projectId: string, adapterId: string): boolean {
+  const entry = SESSIONS.get(key(projectId, adapterId));
+  return Boolean(entry?.turn && !entry.turn.settled);
 }
 
 export async function abortSessionTurn(projectId: string, adapterId: string): Promise<boolean> {
@@ -515,7 +622,9 @@ function writeStdinMessage(entry: SessionEntry, text: string): boolean {
   }
 }
 
-async function performTurn(
+let turnCounter = 0;
+
+function performTurn(
   entry: SessionEntry,
   text: string,
   handlers: TurnHandlers,
@@ -523,28 +632,36 @@ async function performTurn(
   idleMs: number,
   overrides: PromptOverrides,
 ): Promise<TurnResult> {
+  turnCounter += 1;
+  const turnId = `${entry.adapterId}:${turnCounter}`;
+
   entry.turn = {
     handlers,
     text: '',
     settled: false,
     settle: () => undefined,
     assistantIds: new Set(),
-    partText: new Map(),
-    emittedParts: new Set(),
+    translator: createTranslator(entry, turnId),
     meta: { mode: overrides.mode },
+    awaitingUser: false,
+    closing: false,
   };
   const result = waitForTurn(entry, timeoutMs, idleMs);
 
-  if (SERVE_ADAPTERS.has(entry.adapterId)) {
-    const delivery = await sendRemoteMessage(entry, text, overrides);
-    if (delivery === 'failed' && !writeStdinMessage(entry, text)) {
-      settleTurn(entry, { ok: false, text: '', error: 'Could not deliver the message to this adapter session' });
-      return result;
+  const dispatch = async () => {
+    if (SERVE_ADAPTERS.has(entry.adapterId)) {
+      const delivery = await sendRemoteMessage(entry, text, overrides);
+      if (delivery === 'failed' && !writeStdinMessage(entry, text)) {
+        settleTurn(entry, { ok: false, text: '', error: 'Could not deliver the message to this adapter session' });
+      }
+      return;
     }
-  } else if (!writeStdinMessage(entry, text)) {
-    settleTurn(entry, { ok: false, text: '', error: 'Process stdin unavailable' });
-  }
+    if (!writeStdinMessage(entry, text)) {
+      settleTurn(entry, { ok: false, text: '', error: 'Process stdin unavailable' });
+    }
+  };
 
+  void dispatch();
   return result;
 }
 
@@ -588,11 +705,6 @@ export async function talkToSession(opts: {
     () => undefined,
   );
   return run;
-}
-
-export function isSessionBusy(projectId: string, adapterId: string): boolean {
-  const entry = SESSIONS.get(key(projectId, adapterId));
-  return Boolean(entry?.turn && !entry.turn.settled);
 }
 
 const SERVE_ADAPTERS = new Set(['opencode', 'kilocode']);
@@ -833,7 +945,7 @@ export function getSession(projectId: string, adapterId: string): SessionState |
 }
 
 function publicState(entry: SessionEntry): SessionState {
-  const { child, lineBuffer, queue, turn, eventStream, ...state } = entry;
+  const { child, lineBuffer, queue, turn, eventStream, eventStreamReady, eventStreamConnected, agentModes, ...state } = entry;
   return { ...state, status: resolveStatus(entry) };
 }
 
@@ -946,15 +1058,13 @@ export async function startSession(opts: {
   child.stdout?.on('data', (data) => {
     const text = data.toString();
     console.log(`[${adapterId}] stdout:`, text);
-    deliver(state, text);
+    deliverStdout(state, text);
   });
 
+  // stderr is diagnostics, not conversation. It was previously injected into
+  // the reply, so a deprecation warning became something the agent "said".
   child.stderr?.on('data', (data) => {
-    const text = data.toString();
-    console.log(`[${adapterId}] stderr:`, text);
-    if (state.turn && !state.turn.settled) {
-      state.turn.handlers.onText?.(text.endsWith('\n') ? text : `${text}\n`);
-    }
+    console.log(`[${adapterId}] stderr:`, data.toString());
   });
 
   child.on('exit', (code) => {
@@ -1059,17 +1169,31 @@ export async function stopAll(projectId: string): Promise<void> {
   }
 }
 
+/**
+ * Primary agents the running server offers, cached per session.
+ *
+ * This is asked for on the way into every chat message, and the answer only
+ * changes when the project does. Asking the server each time added a round trip
+ * before the prompt was even sent, which is what made the first reply arrive
+ * late. `force` bypasses the cache for an explicit refresh.
+ */
 export async function getSessionAgentModes(
   projectId: string,
   adapterId: string,
+  force = false,
 ): Promise<Array<{ id: string; name: string }>> {
   const entry = SESSIONS.get(key(projectId, adapterId));
   if (!entry?.serverUrl || !SERVE_ADAPTERS.has(adapterId)) return [];
 
+  const cached = entry.agentModes;
+  if (!force && cached && Date.now() - cached.at < AGENT_MODES_TTL_MS) return cached.modes;
+
   const agents = await listRemoteAgents(entry.serverUrl);
-  return agents
+  const modes = agents
     .filter((agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'))
     .map((agent) => ({ id: agent.id, name: agent.name }));
+  entry.agentModes = { at: Date.now(), modes };
+  return modes;
 }
 
 export async function setSessionMode(

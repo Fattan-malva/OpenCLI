@@ -3,11 +3,14 @@ import type { ReactNode } from 'react';
 import { useStore } from '../store';
 import { adapterMeta } from '../lib/data';
 import { Icon } from '../lib/icons';
+import { AdapterIcon } from './AdapterIcon';
+import { AnswersProvider, ConversationItemView } from './chat/ConversationItems';
 import type { ChatMessage } from '../lib/types';
 
 const STATUS_CHIP: Record<ChatMessage['status'], { label: string; icon: string; classes: string }> = {
   pending: { label: 'Queued', icon: 'clock', classes: 'text-app-text bg-app-border/40 border-app-border' },
   streaming: { label: 'Running', icon: 'loader-2', classes: 'text-indigo-300 bg-indigo-500/10 border-indigo-500/30' },
+  awaiting_input: { label: 'Needs you', icon: 'help-circle', classes: 'text-sky-300 bg-sky-500/10 border-sky-500/30' },
   complete: { label: 'Done', icon: 'check-circle-2', classes: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   error: { label: 'Failed', icon: 'x-circle', classes: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
   interrupted: { label: 'Stopped', icon: 'ban', classes: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
@@ -18,137 +21,60 @@ function agentMeta(agentId?: string) {
 }
 
 /**
- * One line of agent output, classified for styling only.
+ * The agent's turn, rendered from its items.
  *
- * The text is always kept verbatim. Classification decides colour and an icon,
- * never whether a line is shown, because dropping output the UI does not
- * recognise makes a transcript quietly incomplete.
+ * The server folds protocol events into a list of named items, and this renders
+ * that list. It used to instead take one text column and guess at each line by
+ * its glyph — `⏺` for a tool, `✳` for reasoning — which is why tool output was
+ * invisible and a tool call could not be expanded. Nothing here parses text
+ * any more; a message with no items falls back to its prose.
  */
-type LineKind = 'tool' | 'thinking' | 'file' | 'retry' | 'error' | 'done' | 'text';
-
-function classifyLine(raw: string): { kind: LineKind; text: string } {
-  // Markers come from the server's own activity formatting.
-  const tool = raw.match(/^\u{23FA}\s*([^\s(]+)\s*(\([\s\S]*)?$/u);
-  if (tool) return { kind: 'tool', text: raw };
-
-  if (/^\u{2733}\s*thinking\b/u.test(raw)) return { kind: 'thinking', text: raw };
-  if (/^\u{270E}\s/u.test(raw)) return { kind: 'file', text: raw };
-  if (/^\u{21BB}\s/u.test(raw)) return { kind: 'retry', text: raw };
-  if (/^!\s/u.test(raw)) return { kind: 'error', text: raw };
-  if (/^\u{2713}\s/u.test(raw)) return { kind: 'done', text: raw };
-  return { kind: 'text', text: raw };
-}
-
-const LINE_STYLE: Record<LineKind, { text: string; icon?: string }> = {
-  tool: { text: 'text-sky-300' },
-  thinking: { text: 'text-purple-300/90 italic' },
-  file: { text: 'text-amber-300' },
-  retry: { text: 'text-amber-400/90' },
-  error: { text: 'text-rose-400' },
-  done: { text: 'text-emerald-400/90' },
-  text: { text: 'text-app-textStrong' },
-};
-
-/**
- * Renders a message exactly as the agent produced it, while it streams.
- *
- * Nothing is trimmed, collapsed or dropped. Lines the UI recognises (tool calls,
- * thinking, file edits, retries, errors) get colour and an icon so the names are
- * easy to scan; everything else is shown verbatim. A CLI's own full-screen TUI
- * belongs in the Terminal tab, which streams the raw PTY instead of this text.
- */
-function MessageOutput({ text, streaming }: { text: string; streaming: boolean }) {
+function TurnItems({ message }: { message: ChatMessage }) {
+  const { answerRequest, chatRequests } = useStore();
+  const streaming = message.status === 'streaming';
+  const items = message.items ?? [];
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep the newest output in view while a reply is still arriving.
   useEffect(() => {
     if (!streaming) return;
-    const el = endRef.current;
-    if (el) el.scrollIntoView({ block: 'end' });
-  }, [text, streaming]);
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [items.length, streaming]);
 
-  if (!text) {
-    return streaming ? (
-      <div className="flex items-center gap-2 text-app-text text-xs">
-        <span className="inline-block w-1.5 h-3.5 bg-emerald-400 animate-caret" />
-        Waiting for the first token…
+  if (items.length === 0) {
+    if (!message.text) {
+      return streaming ? (
+        <div className="flex items-center gap-2 text-app-text text-xs">
+          <span className="inline-block w-1.5 h-3.5 bg-emerald-400 animate-caret" />
+          Waiting for the first token…
+        </div>
+      ) : null;
+    }
+    return (
+      <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2">
+        <div className="font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap break-words text-app-textStrong">
+          {message.text}
+        </div>
       </div>
-    ) : null;
+    );
   }
 
-  const lines = text.split('\n');
-
   return (
-    <div className="rounded-lg border border-app-border bg-[#0b0d10] px-3 py-2">
-      <div className="font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap break-words">
-        {lines.map((line, index) => {
-          const { kind, text: content } = classifyLine(line);
-          const style = LINE_STYLE[kind];
-          return (
-            <span key={index} className={style.text}>
-              {/* Only the thinking line blinks, and it blinks in place: the
-                  caret keyframes change opacity and nothing else. */}
-              {streaming && kind === 'thinking' && <LiveCursor />}
-              {content}
-              {'\n'}
-            </span>
-          );
-        })}
+    <AnswersProvider
+      value={{
+        answerRequest,
+        // Only the message that is actually holding a request offers the
+        // controls, so an old question further up the transcript stays readable
+        // instead of looking like something to answer again.
+        answerable: Boolean(chatRequests[message.id]),
+      }}
+    >
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <ConversationItemView key={item.id} item={item} messageId={message.id} />
+        ))}
+        <div ref={endRef} />
       </div>
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-/**
- * Streaming caret.
- *
- * Blinks in place at a fixed size. The `animate-caret` keyframes only change
- * opacity, so nothing scales or zooms while text is arriving.
- */
-function LiveCursor() {
-  return <span className="inline-block w-[7px] h-[13px] ml-px align-text-bottom bg-emerald-400 animate-caret" />;
-}
-
-function MessageActions({ agentId }: { agentId?: string }) {
-  const { sendChat } = useStore();
-  const [value, setValue] = useState('');
-
-  const submit = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || !agentId) return;
-    void sendChat(trimmed, agentId);
-    setValue('');
-  };
-
-  return (
-    <div className="mt-2 flex flex-wrap gap-2">
-      <input
-        type="text"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            submit(value);
-          }
-        }}
-        placeholder={`Reply to ${agentId}...`}
-        className="flex-1 min-w-40 bg-app-bg border border-app-border rounded px-3 py-1.5 text-xs text-app-textStrong focus:outline-none focus:border-app-primary"
-      />
-      <button
-        onClick={() => submit('yes, continue')}
-        className="px-3 py-1.5 rounded text-xs font-medium bg-emerald-600/90 hover:bg-emerald-500 text-white transition-colors"
-      >
-        Approve
-      </button>
-      <button
-        onClick={() => submit('no, stop and explain what is blocked')}
-        className="px-3 py-1.5 rounded text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition-colors"
-      >
-        Deny
-      </button>
-    </div>
+    </AnswersProvider>
   );
 }
 
@@ -176,48 +102,30 @@ function ModeBadge({ message }: { message: ChatMessage }) {
 }
 
 function AgentMessage({ message }: { message: ChatMessage }) {
-  const { chatRequests } = useStore();
   const meta = agentMeta(message.agentId);
   const chip = STATUS_CHIP[message.status];
-  const request = chatRequests[message.id] ?? message.request;
   const isPlanner = message.role === 'planner';
-
-  let interactive: ReactNode = null;
-  if (request) {
-    interactive = (
-      <div className={`mt-2 rounded-lg border p-3 ${request.type === 'permission' ? 'border-amber-500/30 bg-amber-500/5' : 'border-sky-500/30 bg-sky-500/5'}`}>
-        <div className={`flex items-start gap-2 text-xs ${request.type === 'permission' ? 'text-amber-300' : 'text-sky-300'}`}>
-          <Icon name={request.type === 'permission' ? 'shield-alert' : 'help-circle'} className="w-4 h-4 mt-0.5 shrink-0" />
-          <div className="min-w-0">
-            <div className="font-semibold">
-              {request.type === 'permission' ? 'Permission required' : 'The agent is asking'}
-            </div>
-            <div className="opacity-90 break-words">{request.message}</div>
-            {request.command && (
-              <div className="mt-2 font-mono text-[11px] bg-[#09090b] border border-app-border rounded px-2 py-1 break-words">
-                {request.command}
-              </div>
-            )}
-          </div>
-        </div>
-        <MessageActions agentId={message.agentId} />
-      </div>
-    );
-  }
+  const hasContent = Boolean(message.items?.length) || Boolean(message.text);
 
   return (
     <div className="flex gap-3">
       <div className={`shrink-0 w-8 h-8 rounded-lg border flex items-center justify-center ${meta.bg} ${meta.border} ${meta.color}`}>
-        <Icon name={isPlanner ? 'workflow' : meta.icon} className="w-4 h-4" />
+        {isPlanner ? (
+          <Icon name="workflow" className="w-4 h-4" />
+        ) : (
+          <AdapterIcon id={message.agentId ?? 'system'} className="w-4 h-4" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
+          {/* The adapter is named once, right after its mark. The raw id used to
+              be repeated beside the display name, which read as two different
+              adapters rather than one adapter described twice. */}
           <span className={`text-xs font-semibold ${meta.color}`}>{isPlanner ? 'Planner' : meta.name}</span>
-          {message.agentId && <span className="text-[10px] font-mono text-app-text">{message.agentId}</span>}
           <ModeBadge message={message} />
           <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-medium ${chip.classes}`}>
-            {/* A running turn shows a circular loader; the blink is reserved for
-                the thinking line so the two are never confused. */}
+            {/* A running turn shows a circular loader. A turn waiting on a person
+                does not spin, because nothing is happening until they answer. */}
             <Icon
               name={chip.icon}
               className={`w-3 h-3 ${message.status === 'streaming' ? 'animate-spin' : ''}`}
@@ -229,13 +137,11 @@ function AgentMessage({ message }: { message: ChatMessage }) {
           )}
         </div>
 
-        {message.text && (
+        {hasContent && (
           <div className="mt-2">
-            <MessageOutput text={message.text} streaming={message.status === 'streaming'} />
+            <TurnItems message={message} />
           </div>
         )}
-
-        {interactive}
       </div>
     </div>
   );
