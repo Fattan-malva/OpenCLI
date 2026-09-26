@@ -303,6 +303,7 @@ export type ConversationItemKind =
   | 'tool'
   | 'skill'
   | 'todo'
+  | 'plan'
   | 'file_change'
   | 'question'
   | 'permission'
@@ -385,6 +386,35 @@ export interface ConversationTodoItem {
   items: ConversationTodoEntry[];
 }
 
+/**
+ * A step of a plan the agent produced.
+ *
+ * A plan arrives as a JSON document, and rendering that document as text is
+ * unreadable: it is one long line of escaped quotes that says nothing at a
+ * glance. The steps are kept as steps so a person can read what is going to
+ * happen before it happens.
+ */
+export interface ConversationPlanStep {
+  id: string;
+  title: string;
+  description?: string;
+  agentId?: string;
+  modeId?: string;
+  fileScopes?: string[];
+  /** Zero-based indexes into this same step list. */
+  dependsOn?: number[];
+}
+
+export interface ConversationPlanItem {
+  id: string;
+  kind: 'plan';
+  status: ConversationItemStatus;
+  seq: number;
+  steps: ConversationPlanStep[];
+  /** The agent's own explanation of why it chose this plan. */
+  reason?: string;
+}
+
 export interface ConversationFileChangeItem {
   id: string;
   kind: 'file_change';
@@ -446,6 +476,7 @@ export type ConversationItem =
   | ConversationToolItem
   | ConversationSkillItem
   | ConversationTodoItem
+  | ConversationPlanItem
   | ConversationFileChangeItem
   | ConversationQuestionItem
   | ConversationPermissionItem

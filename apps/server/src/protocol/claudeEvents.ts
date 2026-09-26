@@ -12,6 +12,7 @@ import {
   type AgentOption,
   type EventFactory,
 } from './agentEvent.js';
+import { planFrom } from './planPayload.js';
 
 function asText(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -323,30 +324,38 @@ export function createClaudeTranslator(turnId: string, adapterId: string): Claud
     const content = message.content;
     if (!Array.isArray(content)) return [];
 
-    const events: AgentEvent[] = [];
-    for (const raw of content) {
-      if (!raw || typeof raw !== 'object') continue;
-      const block = raw as Record<string, unknown>;
-      if (String(block.type ?? '') !== 'tool_result') continue;
-      const id = asText(block.tool_use_id) ?? asText(block.toolUseId);
-      if (!id) continue;
-      const failed = block.is_error === true;
-      const output = blockText(block.content);
-      events.push(
-        factory.emit({
-          type: 'tool',
-          phase: 'complete',
-          id,
-          data: {
-            name: names.get(id) ?? 'tool',
-            status: failed ? 'error' : 'completed',
-            output,
-            error: failed ? output || 'The tool reported an error' : undefined,
-          },
-        }),
-      );
-    }
-    return events;
+      const events: AgentEvent[] = [];
+      for (const raw of content) {
+        if (!raw || typeof raw !== 'object') continue;
+        const block = raw as Record<string, unknown>;
+        if (String(block.type ?? '') !== 'tool_result') continue;
+        const id = asText(block.tool_use_id) ?? asText(block.toolUseId);
+        if (!id) continue;
+        const failed = block.is_error === true;
+        const output = blockText(block.content);
+        events.push(
+          factory.emit({
+            type: 'tool',
+            phase: 'complete',
+            id,
+            data: {
+              name: names.get(id) ?? 'tool',
+              status: failed ? 'error' : 'completed',
+              output,
+              error: failed ? output || 'The tool reported an error' : undefined,
+            },
+          }),
+        );
+        // Claude reports a plan in the tool result rather than in a part, so it
+        // is recognised here for the same reason as on the other adapter.
+        const plan = planFrom(block.content);
+        if (plan) {
+          events.push(
+            factory.emit({ type: 'plan', phase: 'complete', id: 'plan', data: { steps: plan.steps, reason: plan.reason } }),
+          );
+        }
+      }
+      return events;
   }
 
   return {

@@ -11,6 +11,7 @@ import {
 import { createEventFactory } from '../apps/server/src/protocol/agentEvent.js';
 import { createClaudeTranslator } from '../apps/server/src/protocol/claudeEvents.js';
 import { createOpencodeTranslator } from '../apps/server/src/protocol/opencodeEvents.js';
+import { planFrom } from '../apps/server/src/protocol/planPayload.js';
 import { applyEvents, conversationText, pendingRequest } from '../apps/server/src/conversation/turnState.js';
 import { assignDefaultAgents, buildPlannerPrompt, heuristicPlannerDecision, parseExecutionPlan, parsePlannerDecision } from '../apps/server/src/planner.js';
 import { createWorkflowForPlan, parseMention, type ChatDeps } from '../apps/server/src/chat.js';
@@ -1170,5 +1171,78 @@ describe('the agent todo list reaches the conversation', () => {
     // still shows what the agent ran.
     expect(items.some((item) => item.kind === 'tool' && item.name === 'todowrite')).toBe(true);
     expect(items.some((item) => item.kind === 'todo')).toBe(true);
+  });
+});
+
+describe('a plan is rendered as steps, not as raw JSON', () => {
+  const PLAN = {
+    steps: [
+      { title: 'Fix corrupted text and verify image URLs', description: 'Replace the stray fragments.', agentId: 'opencode', modeId: 'build', fileScopes: ['index.html'], dependsOn: [] },
+      { title: 'Fix missing CSS utility and run pre-flight audit', description: 'Add .visually-hidden, then audit.', agentId: 'opencode', modeId: 'build', fileScopes: ['index.html'], dependsOn: [0] },
+    ],
+    reason: 'The audit needs the clean content first.',
+  };
+
+  it('reads a plan out of a tool result', () => {
+    const payload = planFrom(JSON.stringify(PLAN));
+    expect(payload?.steps).toHaveLength(2);
+    expect(payload?.steps[0]?.title).toBe('Fix corrupted text and verify image URLs');
+    expect(payload?.reason).toBe('The audit needs the clean content first.');
+  });
+
+  it('reads a plan that is wrapped in prose', () => {
+    const payload = planFrom(`Here is what I plan to do: ${JSON.stringify(PLAN)} Let me know.`);
+    expect(payload?.steps).toHaveLength(2);
+  });
+
+  it('ignores JSON that is not a plan', () => {
+    // Requiring a title on every entry is what keeps ordinary tool output that
+    // happens to have a `steps` key from being shown as a plan.
+    expect(planFrom({ steps: [{ count: 3 }] })).toBeUndefined();
+    expect(planFrom('just some text')).toBeUndefined();
+    expect(planFrom({ ok: true, output: 'npm test passed' })).toBeUndefined();
+  });
+
+  it('shows the plan as a step list instead of a JSON line', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'prt_step',
+            type: 'tool',
+            tool: 'step',
+            state: { status: 'completed', input: PLAN, output: JSON.stringify(PLAN) },
+          },
+        },
+      }),
+    );
+
+    const plan = items.find((item) => item.kind === 'plan');
+    expect(plan).toBeDefined();
+    if (plan?.kind !== 'plan') return;
+    expect(plan.steps.map((step) => step.title)).toEqual([
+      'Fix corrupted text and verify image URLs',
+      'Fix missing CSS utility and run pre-flight audit',
+    ]);
+    expect(plan.steps[1]?.dependsOn).toEqual([0]);
+    // The raw document never becomes message text, which is what used to print
+    // one unreadable line of escaped JSON into the reply.
+    expect(conversationText(items)).toBe('');
+  });
+
+  it('catches a plan pasted straight into the reply', () => {
+    const translator = createOpencodeTranslator('turn-1', 'opencode');
+    const items = applyEvents(
+      [],
+      translator.push({
+        type: 'message.part.updated',
+        properties: { part: { id: 'prt_text', type: 'text', text: JSON.stringify(PLAN) } },
+      }),
+    );
+    expect(items.some((item) => item.kind === 'plan')).toBe(true);
+    expect(conversationText(items)).toBe('');
   });
 });

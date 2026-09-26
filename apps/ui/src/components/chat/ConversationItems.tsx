@@ -6,6 +6,7 @@ import type {
   ConversationFileChangeItem,
   ConversationItem,
   ConversationPermissionItem,
+  ConversationPlanItem,
   ConversationQuestionItem,
   ConversationSkillItem,
   ConversationStatusItem,
@@ -38,6 +39,8 @@ export function ConversationItemView({ item, messageId }: { item: ConversationIt
       return <SkillItem item={item} />;
     case 'todo':
       return <TodoItem item={item} />;
+    case 'plan':
+      return <PlanItem item={item} />;
     case 'file_change':
       return <FileChangeItem item={item} />;
     case 'question':
@@ -100,17 +103,6 @@ function isShellTool(name: string): boolean {
   return SHELL_TOOLS.has(name.trim().toLowerCase());
 }
 
-/** Renders a tool's arguments as readable text without pretending to know more. */
-function formatInput(input: unknown): string {
-  if (input === undefined || input === null) return '';
-  if (typeof input === 'string') return input;
-  try {
-    return JSON.stringify(input, null, 2);
-  } catch {
-    return String(input);
-  }
-}
-
 const TOOL_STATUS: Record<ConversationToolItem['status'], { label: string; classes: string }> = {
   pending: { label: 'Queued', classes: 'text-app-text border-app-border' },
   running: { label: 'Running', classes: 'text-sky-300 border-sky-500/30' },
@@ -137,7 +129,7 @@ function ToolBlock({ item }: { item: ConversationToolItem }) {
   const [open, setOpen] = useState(false);
   const hasDetails = Boolean(item.output || item.error || item.truncated);
   const status = TOOL_STATUS[item.status];
-  const command = item.command ?? (shell ? formatInput(item.input) : item.title);
+  const command = item.command ?? (shell ? formatPayload(item.input) : item.title);
 
   return (
     <div className="rounded border border-app-border bg-[#0b0d10] overflow-hidden">
@@ -176,7 +168,7 @@ function ToolBlock({ item }: { item: ConversationToolItem }) {
                 Arguments
               </summary>
               <pre className="px-2.5 pb-2 font-mono text-[11px] text-app-text whitespace-pre-wrap break-words">
-                {formatInput(item.input)}
+                {formatPayload(item.input)}
               </pre>
             </details>
           )}
@@ -236,6 +228,107 @@ function TodoItem({ item }: { item: ConversationTodoItem }) {
         ))}
       </ul>
     </details>
+  );
+}
+
+/**
+ * Renders a tool's arguments or output as readable text.
+ *
+ * A JSON document is pretty-printed rather than shown as one long line of
+ * escaped quotes, which is unreadable at any width. Anything that is not JSON
+ * is passed through untouched: the tool's own formatting is the best guide
+ * available for anything this does not recognise.
+ */
+function formatPayload(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * A plan the agent produced, as a list of steps.
+ *
+ * This replaces a plan arriving as one line of raw JSON. The document was
+ * already structured, so the only thing lost by printing it was legibility: the
+ * steps, their descriptions and the files each one touches are all readable now.
+ */
+function PlanItem({ item }: { item: ConversationPlanItem }) {
+  const [open, setOpen] = useState(true);
+  const running = item.status === 'running';
+
+  return (
+    <div className="rounded border border-indigo-500/30 bg-indigo-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] text-indigo-300 hover:text-indigo-200 transition-colors"
+      >
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} className="w-3 h-3 shrink-0" />
+        <Icon name="list-checks" className="w-3.5 h-3.5 shrink-0" />
+        <span className="font-semibold">Plan</span>
+        <span className="text-app-text">
+          {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
+        </span>
+        {running && <Icon name="loader-2" className="w-3 h-3 shrink-0 animate-spin" />}
+      </button>
+
+      {open && (
+        <div className="border-t border-indigo-500/20 px-2.5 py-2 space-y-2">
+          {item.reason && (
+            <p className="text-[11px] leading-relaxed text-app-text">{item.reason}</p>
+          )}
+          <ol className="space-y-2">
+            {item.steps.map((step, index) => (
+              <li key={step.id} className="flex items-start gap-2.5">
+                <span className="shrink-0 w-4 h-4 mt-px rounded-full border border-indigo-500/40 text-indigo-300 text-[9px] font-mono flex items-center justify-center">
+                  {index + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11.5px] leading-relaxed text-app-textStrong">{step.title}</div>
+                  {step.description && (
+                    <details className="mt-0.5">
+                      <summary className="text-[10.5px] text-app-text cursor-pointer select-none hover:text-app-textStrong transition-colors">
+                        Detail
+                      </summary>
+                      <p className="mt-1 text-[10.5px] leading-relaxed text-app-text whitespace-pre-wrap break-words">
+                        {step.description}
+                      </p>
+                    </details>
+                  )}
+                  {(step.agentId || step.fileScopes?.length) && (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9.5px] font-mono text-app-text/80">
+                      {step.agentId && <span className="text-app-primary">{step.agentId}</span>}
+                      {step.modeId && <span className="text-app-text/70">/{step.modeId}</span>}
+                      {step.fileScopes?.map((scope) => (
+                        <span key={scope} className="text-app-text/60">
+                          {scope}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
   );
 }
 

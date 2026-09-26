@@ -17,6 +17,7 @@ import {
   type TodoEntry,
 } from './agentEvent.js';
 import { blockText } from './claudeEvents.js';
+import { planFrom } from './planPayload.js';
 
 function asText(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -159,13 +160,20 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
 
     const partType = String(part.type ?? '');
 
-    if (partType === 'text') {
-      const text = asText(part.text) ?? '';
-      if (!text) return [];
-      const delta = deltaFromSnapshot(partId, text);
-      if (!delta) return [];
-      return [factory.emit({ type: 'message', phase: 'delta', id: partId, data: { text: delta } })];
-    }
+      if (partType === 'text') {
+        const text = asText(part.text) ?? '';
+        // A plan pasted straight into the reply is still a plan. Showing the raw
+        // document instead is what produced one unreadable line of escaped JSON
+        // where a readable list of steps belonged.
+        const plan = planFrom(text);
+        if (plan) {
+          return [factory.emit({ type: 'plan', phase: 'complete', id: 'plan', data: { steps: plan.steps, reason: plan.reason } })];
+        }
+        if (!text) return [];
+        const delta = deltaFromSnapshot(partId, text);
+        if (!delta) return [];
+        return [factory.emit({ type: 'message', phase: 'delta', id: partId, data: { text: delta } })];
+      }
 
     if (partType === 'reasoning') {
       const text = asText(part.text) ?? '';
@@ -208,6 +216,23 @@ export function createOpencodeTranslator(turnId: string, adapterId: string): Ope
             factory.emit({ type: 'todo', phase: phase === 'complete' ? 'complete' : 'update', id: 'todo', data: { items } }),
           );
         }
+      }
+
+      // A plan is recognised by its shape, not by the tool's name, because the
+      // same plan turns up as tool arguments, as tool output, and as plain
+      // assistant text depending on the adapter and the mode.
+      const plan = planFrom(input) ?? planFrom(state.output ?? state.result ?? part.output);
+      if (plan) {
+        events.push(
+          factory.emit({
+            type: 'plan',
+            // A plan is not in progress in the way a tool is: it is either the
+            // one the agent is about to work to, or the one it has committed to.
+            phase: phase === 'complete' ? 'complete' : 'start',
+            id: 'plan',
+            data: { steps: plan.steps, reason: plan.reason },
+          }),
+        );
       }
       return events;
     }

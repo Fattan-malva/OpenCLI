@@ -21,6 +21,7 @@ import type {
   ConversationStatusItem,
   ConversationTextItem,
   ConversationTodoItem,
+  ConversationPlanItem,
   ConversationToolData,
   ConversationToolItem,
 } from '@opencli/domain';
@@ -193,6 +194,21 @@ export function applyEvent(items: ConversationItem[], event: AgentEvent): Conver
         status: event.phase === 'complete' ? 'completed' : 'running',
         seq: previous?.seq ?? event.seq,
         items: event.data.items ?? [],
+      };
+      return replaceItem(items, item);
+    }
+
+    case 'plan': {
+      // One live plan per turn, because the agent is working to one plan. Two
+      // would read as two competing sets of steps.
+      const index = indexOfItem(items, 'plan');
+      const item: ConversationPlanItem = {
+        id: 'plan',
+        kind: 'plan',
+        status: event.phase === 'complete' ? 'completed' : 'running',
+        seq: index === -1 ? event.seq : (items[index]?.seq ?? event.seq),
+        steps: event.data.steps,
+        reason: event.data.reason,
       };
       return replaceItem(items, item);
     }

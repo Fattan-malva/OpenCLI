@@ -279,6 +279,7 @@ export type ConversationItem =
   | ConversationToolItem
   | ConversationSkillItem
   | ConversationTodoItem
+  | ConversationPlanItem
   | ConversationFileChangeItem
   | ConversationQuestionItem
   | ConversationPermissionItem
@@ -334,6 +335,26 @@ export interface ConversationTodoItem {
   status: ConversationItemStatus;
   seq: number;
   items: ConversationTodoEntry[];
+}
+
+/** A step of a plan the agent produced, kept structured rather than as JSON. */
+export interface ConversationPlanStep {
+  id: string;
+  title: string;
+  description?: string;
+  agentId?: string;
+  modeId?: string;
+  fileScopes?: string[];
+  dependsOn?: number[];
+}
+
+export interface ConversationPlanItem {
+  id: string;
+  kind: 'plan';
+  status: ConversationItemStatus;
+  seq: number;
+  steps: ConversationPlanStep[];
+  reason?: string;
 }
 
 export interface ConversationFileChangeItem {

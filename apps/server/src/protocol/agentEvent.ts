@@ -14,7 +14,7 @@
 // `delta` accumulates into the subject. `update` replaces the subject's
 // non-text state. `complete` closes it.
 
-import type { ConversationToolData } from '@opencli/domain';
+import type { ConversationPlanStep, ConversationToolData } from '@opencli/domain';
 
 export type AgentEventPhase = 'start' | 'delta' | 'update' | 'complete';
 
@@ -105,6 +105,12 @@ export interface TodoData {
   items: TodoEntry[];
 }
 
+/** A plan the agent produced, already parsed out of whatever carried it. */
+export interface PlanData {
+  steps: ConversationPlanStep[];
+  reason?: string;
+}
+
 export interface FileChangeData {
   path: string;
   action: 'created' | 'modified' | 'deleted';
@@ -161,6 +167,7 @@ type AgentEventBody = Subject &
     | { type: 'tool'; phase: 'start' | 'update' | 'complete'; data: ToolData }
     | { type: 'skill'; phase: 'start' | 'update' | 'complete'; data: SkillData }
     | { type: 'todo'; phase: 'update' | 'complete'; data: TodoData }
+    | { type: 'plan'; phase: 'start' | 'complete'; data: PlanData }
     | { type: 'file_change'; phase: 'complete'; data: FileChangeData }
     | { type: 'question'; phase: 'start' | 'complete'; data: QuestionData }
     | { type: 'permission'; phase: 'start' | 'complete'; data: PermissionData }
